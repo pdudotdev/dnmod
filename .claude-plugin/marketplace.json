@@ -1,0 +1,16 @@
+{
+  "name": "dnmod",
+  "owner": {
+    "name": "pdudotdev"
+  },
+  "metadata": {
+    "description": "The dnmod Claude Code mod"
+  },
+  "plugins": [
+    {
+      "name": "dnmod",
+      "source": "./",
+      "description": "Session cost, context and cache figures above the prompt, with a toggle for 30-day stats"
+    }
+  ]
+}

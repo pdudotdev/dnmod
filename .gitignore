@@ -7,3 +7,6 @@ dnmod-plan.md
 # OS / editor
 .DS_Store
 node_modules/
+
+# Written by Claude Code at each load of the mod
+.claude-plugin/types/
