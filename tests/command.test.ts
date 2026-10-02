@@ -105,3 +105,44 @@ test("today's spend comes from the transcript, read in pieces as a big file need
   const text = (await $.command.run(dnmod(''))).text ?? ''
   expect(text.split('\n')[0]).toContain('today $0.44 · total $1.20')
 })
+
+test('the 30 days come out with a 250-character path, keyed short in the store', async ($, on) => {
+  const usage = { input_tokens: 10, cache_read_input_tokens: 1_000_000, output_tokens: 1_000, cache_creation: {} }
+  const reply = (id: string) =>
+    JSON.stringify({ type: 'assistant', timestamp: '1970-01-01T00:00:00.500Z', message: { id, model: 'claude-opus-5-5', usage } })
+  const long = `/Users/me/.claude/projects/-Users-me-Library-Application-Support-Claude-scratch-workspaces-${'x'.repeat(150)}/s1.jsonl`
+  const files: Record<string, string> = { [long]: `${reply('m1')}\n`, '/Users/me/.claude/projects/-a/s2.jsonl': `${reply('m2')}\n` }
+  const store = new Map<string, unknown>()
+  mock.clock(on, { now: 1_000 })
+  mock.env(on, { HOME: '/Users/me' })
+  on('store.get', ($, e) => ({ value: store.get(e.key) }))
+  on('store.set', ($, e) => {
+    store.set(e.key, e.value)
+    return { value: undefined }
+  })
+  on('store.keys', () => ({ value: [...store.keys()] }))
+  on('store.delete', ($, e) => {
+    store.delete(e.key)
+    return { value: undefined }
+  })
+  on('session.surfaces', () => ({ value: [] }))
+  on('session.version', () => ({ value: { version: '2.1.287' } }))
+  on('session.id', () => ({ value: 'abc' }))
+  on('session.cwd', () => ({ value: '/Users/me/repo' }))
+  on('session.usage', () => ({ value: { startedAt: 0, context: { window: 200_000 }, rateLimits: [], cost: { usd: 1 } } }))
+  on('process.run', ($, e) => {
+    const out = (stdout: string) => ({ value: { exitCode: 0, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } })
+    if (e.argv[0] === 'find') return out(`${Object.keys(files).join('\n')}\n`)
+    if (e.argv[0] === 'tail') return out(files[e.argv[e.argv.length - 1]!] ?? '')
+    return out('+0000\n')
+  })
+  on('fs.exists', () => ({ value: false }))
+  on('fs.list', () => ({ value: [] }))
+  on('fs.stat', () => ({ value: { kind: 'file', size: 100, mtimeMs: 5, isLink: false } }))
+  on('ui.open', () => ({ value: { isPlaced: true } }))
+
+  const text = (await $.command.run(dnmod(''))).text ?? ''
+  expect(text).toContain('30d · spend $0.44 · 2 requests')
+  expect([...store.keys()].every(key => key.length <= 21)).toBe(true)
+  expect([...store.keys()].filter(key => key.startsWith('file:'))).toHaveLength(2)
+})

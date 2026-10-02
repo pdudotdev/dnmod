@@ -133,6 +133,11 @@ The API is **early access** (tested on 2.1.283–2.1.287). Re-check these after 
 - **Clock:** renders call `$.clock.now()`, so mount tests need `mock.clock(on)`.
 - **Commands:** `$.command.run` needs the full input: `{ command, args, origin: { kind: 'composer' }, presentation: { isFullscreen, columns } }`.
 
+**The store (`$.store`):**
+- **Key length:** keys of 131 characters were taken, but a 260-character key made `$.store.get` reject. Desktop's scratch-folder transcript paths run to about 255 characters. So file summaries are keyed `file:` plus a 64-bit hash of the path (`fileKey`), with the path kept in the value.
+- **Resilience:** a store call that fails must never abort a run. Before this fix the 30-day view sat on "working out…" forever, because one rejected `get` aborted every refresh and the background refresh swallowed the error.
+- **Size:** 4 MiB of JSON in all. Each installed copy has its own file under `~/.claude/plugins/store/` (`dnmod_dnmod-*.json` for the installed copy, `dnmod_inline-*.json` for the dev copy), which is handy for debugging.
+
 **Files and processes:**
 - **File types:** `FsEntry.kind` is `'file' | 'dir' | 'other'`.
 - **Size limits:** `$.fs.read` rejects files over 4 MiB with no partial reads, and real transcripts are bigger (9.7 MB seen). Read the end or the new bytes with `$.process.run(['tail', '-c', …])`. Its stdout is also capped at 4 MiB (`isStdoutTruncated`).

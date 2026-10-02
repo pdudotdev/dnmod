@@ -231,7 +231,23 @@ const PERIOD = 30 * 86_400_000
 const STATS_FRESH = 120_000
 let statsRun: Promise<void> | null = null
 
-type StoredFile = { size: number; mtimeMs: number; summary: FileSummary }
+type StoredFile = { path: string; size: number; mtimeMs: number; summary: FileSummary }
+
+/**
+ * A file's store key: `file:` and a 64-bit FNV-1a hash of its path, in hex. Paths can run past
+ * 250 characters (Desktop's scratch folders), longer than the store takes as a key; the path
+ * itself is kept in the value and checked on reading.
+ */
+const fileKey = (path: string): string => {
+  let a = 0x811c9dc5
+  let b = 0x01000193 ^ 0x5bd1e995
+  for (let i = 0; i < path.length; i++) {
+    const c = path.charCodeAt(i)
+    a = Math.imul(a ^ c, 0x01000193) >>> 0
+    b = Math.imul(b ^ c, 0x01000193 + 0x1000) >>> 0
+  }
+  return `file:${a.toString(16).padStart(8, '0')}${b.toString(16).padStart(8, '0')}`
+}
 
 /** Every transcript, main or subagent's, written to in the last 31 days. */
 const recentTranscripts = async ($: EngineInterface): Promise<string[]> => {
@@ -244,7 +260,7 @@ const recentTranscripts = async ($: EngineInterface): Promise<string[]> => {
 const refreshStats30 = async ($: EngineInterface, force = false): Promise<void> => {
   statsRun ??= (async () => {
     const now = await $.clock.now()
-    const shared = (await $.store.get('stats30')) as Stats30 | undefined
+    const shared = (await $.store.get('stats30').catch(() => undefined)) as Stats30 | undefined
     if (!force && shared !== undefined && now - shared.at < STATS_FRESH) {
       await update($, stats30, () => shared)
       return
@@ -252,23 +268,27 @@ const refreshStats30 = async ($: EngineInterface, force = false): Promise<void> 
     const summaries: FileSummary[] = []
     const kept = new Set<string>()
     for (const path of await recentTranscripts($)) {
-      const key = `file:${path}`
-      kept.add(key)
-      const stat = await $.fs.stat(path).catch(() => null)
-      if (stat === null) continue
-      const stored = (await $.store.get(key)) as StoredFile | undefined
-      if (stored !== undefined && stored.size === stat.size && stored.mtimeMs === stat.mtimeMs) {
-        summaries.push(stored.summary)
-        continue
+      // One file that can't be read or kept doesn't hold up the rest.
+      try {
+        const key = fileKey(path)
+        kept.add(key)
+        const stat = await $.fs.stat(path)
+        const stored = (await $.store.get(key).catch(() => undefined)) as StoredFile | undefined
+        if (stored?.path === path && stored.size === stat.size && stored.mtimeMs === stat.mtimeMs) {
+          summaries.push(stored.summary)
+          continue
+        }
+        const lines = await readNewLines($, path, { offset: 0, skipLine: false })
+        const summary = summarizeFile(lines, path.includes('/subagents/'))
+        summaries.push(summary)
+        // The store holds 4 MiB in all: past that a summary isn't kept, and is worked out again next time.
+        await $.store.set(key, { path, size: stat.size, mtimeMs: stat.mtimeMs, summary }).catch(() => undefined)
+      } catch {
+        // skipped this time; the next run tries it again
       }
-      const lines = await readNewLines($, path, { offset: 0, skipLine: false })
-      const summary = summarizeFile(lines, path.includes('/subagents/'))
-      summaries.push(summary)
-      // The store holds 4 MiB in all: past that a summary isn't kept, and is worked out again next time.
-      await $.store.set(key, { size: stat.size, mtimeMs: stat.mtimeMs, summary }).catch(() => undefined)
     }
-    for (const key of await $.store.keys()) {
-      if (key.startsWith('file:') && !kept.has(key)) await $.store.delete(key)
+    for (const key of await $.store.keys().catch(() => [])) {
+      if (key.startsWith('file:') && !kept.has(key)) await $.store.delete(key).catch(() => undefined)
     }
     const offsetMinutes = parseOffset(await firstLine($, ['date', '+%z']).catch(() => '')) ?? 0
     const stats = mergeStats(summaries, now, PERIOD, offsetMinutes)
