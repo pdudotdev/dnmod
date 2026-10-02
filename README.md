@@ -1,25 +1,33 @@
 # dnmod
 
-**TL;DR:** a Claude Code mod that shows, at a glance, how full your session's context is, how long its prompt cache stays warm, and what the session has cost, with one click to switch to your last 30 days.
-
-> Early version: the band shows context, the cache countdown and the session's total. Today's spend, the next message's cost and the 30-day figures are coming next.
+**TL;DR:** a Claude Code mod that shows, above the prompt, how full your session's context is, how long its prompt cache stays warm, what the next message will cost, and what the session has cost today and in total. One click switches it to your last 30 days.
 
 ## What you see
 
-| Where | What | Surfaces |
-|---|---|---|
-| **Band** above the prompt | Two rows. A context bar (`39% · 389k of 1M`) with the session's total, and a cache bar that fills as the cache ages (`expires in 52:10`). Both run green to red | CLI, Desktop |
-| **`session│30d`** in the band | Switches the band between this session and the last 30 days | CLI, Desktop |
-| **`/dnmod`** side panel | The same figures, larger | CLI, Desktop |
-| **`/dnmod`** reply in the chat | The same, as text. VS Code can't draw bands or panels for mods yet | VS Code |
-| **`/dnmod check`** | What dnmod can read on this machine (useful over SSH) | All |
-| **`/dnmod demo`** | 60 seconds of the bars running through their colours | CLI, Desktop |
+**This session** (the band's default view):
 
-To use the band's switch: click it, or press `ctrl+x tab` and then `Enter`.
+| Row | Shows |
+|---|---|
+| **Context** | How full the context is (`390k / 1M`), green to red. Beside it, `today $… · total $…` for this session |
+| **Cache** | Fills as the prompt cache ages: `35:31 left · $0.01 now`, capped by `then up to $0.28` (what the next message costs once the cache expires). Expired: `expired · up to $0.27 to continue` |
+
+**Last 30 days** (press `30d`), across every session on this machine:
+
+| Row | Shows |
+|---|---|
+| **Spend** | Spend by day, the total and per day |
+| **Misses** | What cache misses added, split by cause (cache expired, Claude Code upgraded, …) |
+| **Models** | Spend by model, fast mode apart |
+| **Projects** | Spend by project folder |
+| **Context** | Spend by context size when sent: big contexts are where cost piles up |
+
+**Commands:** `/dnmod` switches the band between the two views (as does clicking `session│30d`, or `ctrl+x tab` then `Enter`); `/dnmod check` shows what dnmod can read on this machine (useful over SSH); `/dnmod demo` runs the bars through their colours in 60 seconds.
+
+**Where:** the band shows in the CLI and the Desktop app's Code tab. The VS Code extension can't draw for mods yet: there `/dnmod` replies with the figures as text.
 
 ## How it works
 
-dnmod runs inside Claude Code itself, so there's no separate app or server, and nothing is sent anywhere. It reads Claude Code's own figures for the session, and the transcripts in `~/.claude` for history. Over SSH it runs on the remote machine and reads that machine's sessions.
+dnmod runs inside Claude Code itself, so there's no separate app or server, and nothing is sent anywhere. It reads Claude Code's own figures for the session, and the transcripts in `~/.claude` for the rest, priced at Anthropic's list prices (on a subscription, they're for comparison). Over SSH it runs on the remote machine and reads that machine's sessions.
 
 ## Install
 

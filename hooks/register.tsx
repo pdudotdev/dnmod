@@ -1,12 +1,12 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register, RenderChildren } from 'claude-code'
 
-import type { CacheState, Probe, Spend, Stats30, View } from '../types'
+import type { CacheState, Probe, Share, Spend, Stats30, View } from '../types'
 import { readTranscript } from './cache'
 import type { Ledger } from './ledger'
 import { addLines, costByDay, parseOffset } from './ledger'
 import type { FileSummary } from './stats'
-import { mergeStats, summarizeFile } from './stats'
+import { mergeStats, summarizeFile, SUMMARY_VERSION } from './stats'
 import type { BarModel, Paint } from './format'
 import {
   accent,
@@ -18,19 +18,22 @@ import {
   resend,
   resendLine,
   rowLayout,
-  missesModel,
+  segments,
   spendFigures,
   spendText,
   statsLines,
   svgBar,
   svgChart,
+  svgSegments,
   terminalChart,
+  terminalSegments,
+  topShare,
+  usd,
   terminalBar,
   textBar,
   ttlText,
 } from './format'
 
-const PANE = 'dnmod'
 const DEMO_MS = 60_000
 const TAIL_BYTES = 262_144
 
@@ -231,7 +234,7 @@ const PERIOD = 30 * 86_400_000
 const STATS_FRESH = 120_000
 let statsRun: Promise<void> | null = null
 
-type StoredFile = { path: string; size: number; mtimeMs: number; summary: FileSummary }
+type StoredFile = { v: number; path: string; size: number; mtimeMs: number; summary: FileSummary }
 
 /**
  * A file's store key: `file:` and a 64-bit FNV-1a hash of its path, in hex. Paths can run past
@@ -274,7 +277,7 @@ const refreshStats30 = async ($: EngineInterface, force = false): Promise<void> 
         kept.add(key)
         const stat = await $.fs.stat(path)
         const stored = (await $.store.get(key).catch(() => undefined)) as StoredFile | undefined
-        if (stored?.path === path && stored.size === stat.size && stored.mtimeMs === stat.mtimeMs) {
+        if (stored?.v === SUMMARY_VERSION && stored.path === path && stored.size === stat.size && stored.mtimeMs === stat.mtimeMs) {
           summaries.push(stored.summary)
           continue
         }
@@ -282,7 +285,7 @@ const refreshStats30 = async ($: EngineInterface, force = false): Promise<void> 
         const summary = summarizeFile(lines, path.includes('/subagents/'))
         summaries.push(summary)
         // The store holds 4 MiB in all: past that a summary isn't kept, and is worked out again next time.
-        await $.store.set(key, { path, size: stat.size, mtimeMs: stat.mtimeMs, summary }).catch(() => undefined)
+        await $.store.set(key, { v: SUMMARY_VERSION, path, size: stat.size, mtimeMs: stat.mtimeMs, summary }).catch(() => undefined)
       } catch {
         // skipped this time; the next run tries it again
       }
@@ -304,6 +307,10 @@ const refreshStats30 = async ($: EngineInterface, force = false): Promise<void> 
 const demoProgress = (from: number | null, now: number): number | null =>
   from !== null && now >= from && now - from < DEMO_MS ? (now - from) / DEMO_MS : null
 
+/** What a breakdown bar says to a reader that can't see it. */
+const breakdownAlt = (label: string, segs: readonly { name: string; percent: string }[]): string =>
+  `${label}: ${segs.map(s => `${s.name} ${s.percent}`).join(', ')}`
+
 // SVG units per cell: more than a desktop cell's pixels, so the bar is always scaled down (never
 // up) to its box, uniformly. See svgBar.
 const SVG_UNITS_PER_CELL = 9
@@ -312,7 +319,7 @@ export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     await $.command.register({
       name: 'dnmod',
-      description: 'Show dnmod in a side panel; "check" checks this machine, "demo" previews the bars',
+      description: 'Switch the dnmod band between this session and the last 30 days; "check" checks this machine, "demo" previews the bars',
       argumentHint: '[check | demo]',
     })
     await refreshCache($)
@@ -367,13 +374,17 @@ export const register: Register = on => {
     await update($, probe, () => found)
     if (arg === 'check') return { text: probeText(found).join('\n') }
 
+    // Where a surface draws the band, /dnmod switches it between this session and the last 30
+    // days. VS Code attaches none (its engine runs headless), so the figures are printed there.
+    if (found.surfaces.length > 0) {
+      const next = (await read($, view)) === 'session' ? 'days30' : 'session'
+      if (next === 'days30') void refreshStats30($).catch(() => undefined)
+      await update($, view, () => next)
+      return {}
+    }
     await refreshCache($)
     await refreshSpend($)
     await refreshStats30($)
-    // The pane shows everything where a surface draws it. VS Code attaches none (its
-    // engine runs headless, yet ui.open still answers placed), so print the figures there.
-    const isDrawn = found.surfaces.length > 0 && (await $.ui.open({ id: PANE, title: 'dnmod' })).isPlaced
-    if (isDrawn) return {}
 
     const now = await $.clock.now()
     const { context, cost } = await $.session.usage()
@@ -485,15 +496,33 @@ export const register: Register = on => {
     if (shown === 'days30') {
       const s = await read($, stats30)
       const grey = paint(null, ink)
-      if (s === null) {
+      if (s === null || s.requests === 0) {
         return (
           <Box flexDirection="column">
-            {row('Spend', grey, '', <Text dimColor>working out the last 30 days…</Text>, null)}
-            {row('Misses', grey, '', <Text> </Text>, toggle)}
+            {row('Spend', grey, '', <Text dimColor>{s === null ? 'working out the last 30 days…' : 'no requests in the last 30 days'}</Text>, null)}
+            {row('', grey, '', <Text> </Text>, toggle)}
           </Box>
         )
       }
-      const misses = missesModel(s)
+      // A breakdown row: one segmented bar, the biggest slice's share beside it.
+      const breakdown = (label: string, shares: Share[], extra: RenderChildren, ordered = false) => {
+        const segs = segments(shares, ordered)
+        let bar: RenderChildren
+        if (e.surface === 'terminal') {
+          bar = (
+            <Box flexDirection="row">
+              {terminalSegments(segs, cols.bar).map(part => (
+                <Text color={part.color}>{part.text}</Text>
+              ))}
+            </Box>
+          )
+        } else {
+          const { Svg } = $.ui.resolve(e)
+          bar = <Svg source={svgSegments(segs, cols.bar * SVG_UNITS_PER_CELL, `dnmod-band-${label.toLowerCase()}`)} alt={breakdownAlt(label, segs)} />
+        }
+        const dot = segs[0] === undefined ? grey : ink === 'terminal' ? `ansi256(${segs[0].swatch.ansi})` : segs[0].swatch.light
+        return row(label, dot, topShare(segs), bar, extra)
+      }
       let chart: RenderChildren
       if (e.surface === 'terminal') {
         chart = <Text color={accent(ink)}>{terminalChart(s.days, cols.bar)}</Text>
@@ -501,10 +530,16 @@ export const register: Register = on => {
         const { Svg } = $.ui.resolve(e)
         chart = <Svg source={svgChart(s.days, cols.bar * SVG_UNITS_PER_CELL, 'dnmod-band-chart')} alt="spend by day, last 30 days" />
       }
+      const missShare = s.spend > 0 ? s.misses / s.spend : 0
       return (
         <Box flexDirection="column">
           {row('Spend', accent(ink), '30d', chart, <Text bold>{spendText(s)}</Text>)}
-          {row('Misses', paint(misses.severity, ink), misses.side, bar(misses, 'misses', `cache misses ${misses.main}`), toggle)}
+          {s.byCause.length > 0
+            ? breakdown('Misses', s.byCause, <Text>{`${usd(s.misses)} · ${Math.round(missShare * 100)}% of spend`}</Text>)
+            : row('Misses', paint(0, ink), '0%', <Text dimColor>no cache misses</Text>, null)}
+          {breakdown('Models', s.byModel, null)}
+          {breakdown('Projects', s.byProject, null)}
+          {breakdown('Context', s.byContext, toggle, true)}
         </Box>
       )
     }
@@ -517,92 +552,4 @@ export const register: Register = on => {
     )
   })
 
-  on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
-    const { Box, Text } = $.ui.resolve(e)
-    const ink: Paint = e.surface === 'terminal' ? 'terminal' : 'svg'
-    const now = await $.clock.now()
-    const demoAt = demoProgress(await read($, demoFrom), now)
-    const { context, cost } = await $.session.usage()
-    const ctx = contextModel(context, demoAt)
-    const state = await read($, cache)
-    const cached = cacheModel(state, now, false, demoAt)
-    const nextLine = demoAt === null ? resendLine(resend(state, now)) : null
-    const found = await read($, probe)
-    const cols = rowLayout(e.props.bodyColumns, 0)
-    const spent = spendFigures(await read($, spend), cost?.usd, now)
-    const last30 = await read($, stats30)
-
-    const bar = (m: BarModel, id: string, alt: string) => {
-      if (e.surface === 'terminal') {
-        const parts = terminalBar(m.fraction, cols.bar, m, m.end)
-        const color = paint(m.severity, ink)
-        const grey = paint(null, ink)
-        return (
-          <Box flexDirection="row">
-            <Text color={color}>{parts.fill}</Text>
-            <Text color={grey}>{parts.gap}</Text>
-            <Text inverse={parts.solid} bold color={color}>
-              {parts.main}
-            </Text>
-            <Text inverse={parts.solid} color={color}>
-              {parts.sub}
-            </Text>
-            <Text color={color}>{parts.heavy}</Text>
-            <Text color={grey}>{parts.track}</Text>
-            <Text dimColor>{parts.end}</Text>
-          </Box>
-        )
-      }
-      const { Svg } = $.ui.resolve(e)
-      return <Svg source={svgBar(m, cols.bar * SVG_UNITS_PER_CELL, `dnmod-pane-${id}`)} alt={alt} />
-    }
-
-    const row = (label: string, m: BarModel, middle: RenderChildren) => (
-      <Box flexDirection="row" gap={1} alignItems="center">
-        <Box width={cols.label} flexDirection="row" gap={1}>
-          <Text color={paint(m.severity, ink)}>●</Text>
-          <Text>{label}</Text>
-        </Box>
-        <Box width={cols.bar}>{middle}</Box>
-        <Box width={cols.side} justifyContent="flex-end">
-          <Text dimColor>{m.side}</Text>
-        </Box>
-      </Box>
-    )
-
-    return (
-      <Box flexDirection="column">
-        <Text bold>THIS SESSION</Text>
-        {row('Context', ctx, bar(ctx, 'context', `context ${ctx.side} full`))}
-        {row('Cache', cached, bar(cached, 'cache', `cache ${cached.main}${cached.sub}`))}
-        {nextLine !== null && (
-          <Box flexDirection="row" gap={1}>
-            <Box width={cols.label}>
-              <Text dimColor>Next</Text>
-            </Box>
-            <Text>{nextLine}</Text>
-          </Box>
-        )}
-        <Box flexDirection="row" gap={1}>
-          <Box width={cols.label}>
-            <Text dimColor>Spend</Text>
-          </Box>
-          <Text dimColor>today</Text>
-          <Text bold>{money(spent.today)}</Text>
-          <Text dimColor>· total</Text>
-          <Text bold>{money(spent.total)}</Text>
-          {state.kind === 'clock' && <Text dimColor>{`· ${ttlText(state.ttlMs)} cache`}</Text>}
-        </Box>
-        <Text> </Text>
-        <Text bold>LAST 30 DAYS</Text>
-        {last30 === null ? (
-          <Text dimColor>working them out…</Text>
-        ) : (
-          statsLines(last30).map(line => <Text>{line}</Text>)
-        )}
-        <Text> </Text>
-        <Text dimColor>{found === null ? 'Run /dnmod check to check this machine.' : footerText(found)}</Text>
-      </Box>
-    )
-  })
 }

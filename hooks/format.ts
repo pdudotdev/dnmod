@@ -1,7 +1,7 @@
 // Pure formatting, colours and bar drawing for the band and the pane; no `$` here, so tests can
 // call it directly.
 
-import type { CacheState, Spend, Stats30 } from '../types'
+import type { CacheState, Share, Spend, Stats30 } from '../types'
 import { dayKey } from './ledger'
 import { pricePaid, promptCost } from './prices'
 
@@ -418,7 +418,20 @@ export const missesModel = (s: Stats30): BarModel => {
   }
 }
 
-/** The side panel's and the plain reply's lines for the last 30 days. */
+const breakdownLines = (s: Stats30): string[] => {
+  const line = (title: string, shares: readonly Share[] | undefined, ordered = false) => {
+    const segs = segments(shares ?? [], ordered)
+    return segs.length === 0 ? [] : [`${title}: ${segs.map(g => `${g.name} ${g.percent}`).join(' · ')}`]
+  }
+  return [
+    ...line('misses by cause', s.byCause),
+    ...line('by model', s.byModel),
+    ...line('by project', s.byProject),
+    ...line('by context size', s.byContext, true),
+  ]
+}
+
+/** The plain reply's lines for the last 30 days. */
 export const statsLines = (s: Stats30): string[] => {
   if (s.requests === 0) return ['no requests in the last 30 days']
   const since = s.coveredFrom > s.at - 30 * 86_400_000 + 3_600_000 ? ` (transcripts begin ${new Date(s.coveredFrom).toISOString().slice(0, 10)})` : ''
@@ -428,6 +441,7 @@ export const statsLines = (s: Stats30): string[] => {
     ...(s.cached === null ? [] : [`cached ${Math.round(s.cached * 1000) / 10}% of input tokens`]),
     `cache misses added ${usd(s.misses)}${share}${s.topCause ? `, mostly ${s.topCause}` : ''}`,
     ...(s.topModel === null ? [] : [`${s.topModel.name}: ${Math.round(s.topModel.share * 100)}% of spend`]),
+    ...breakdownLines(s),
   ]
 }
 
@@ -471,6 +485,117 @@ export const svgChart = (days: readonly number[], width: number, id: string): st
     `<g transform="translate(0 ${PAD})">` +
     `<g clip-path="url(#${id}-track)"><rect width="${W}" height="${HEIGHT}" fill="${SVG_TRACK}" fill-opacity="0.14"/><rect width="${W}" height="${HEIGHT}" fill="url(#${id}-grain)"/>${columns}</g>` +
     `</g></svg>`
+  )
+}
+
+// --- Breakdowns ---------------------------------------------------------------------------------
+
+/** A segment's colour on a light theme, a dark one (SVG) and the terminal (256-colour). */
+export type Swatch = { light: string; dark: string; ansi: number }
+
+/**
+ * Categorical slots in fixed order (the dataviz skill's validated reference palette, light and
+ * dark steps; terminal codes nearest to them), for breakdowns ranked by spend. "others" is grey.
+ */
+const CATEGORICAL: readonly Swatch[] = [
+  { light: '#2a78d6', dark: '#3987e5', ansi: 32 },
+  { light: '#eb6834', dark: '#d95926', ansi: 166 },
+  { light: '#1baf7a', dark: '#199e70', ansi: 36 },
+  { light: '#eda100', dark: '#c98500', ansi: 178 },
+  { light: '#e87ba4', dark: '#d55181', ansi: 175 },
+]
+const OTHERS: Swatch = { light: '#9a9893', dark: '#6c6b67', ansi: 245 }
+/** Context size is ordered: one hue, light to dark, smallest band first. */
+const SEQUENTIAL: readonly Swatch[] = [
+  { light: '#c9c2fb', dark: '#c9c2fb', ansi: 189 },
+  { light: '#a99ef7', dark: '#a99ef7', ansi: 147 },
+  { light: '#8b7cf6', dark: '#8b7cf6', ansi: 141 },
+  { light: '#6c5ce0', dark: '#7a6bea', ansi: 99 },
+  { light: '#4a3aa7', dark: '#6655d4', ansi: 61 },
+]
+
+/** One segment of a breakdown bar: its share of the bar, its label, its colour. */
+export type Segment = { name: string; fraction: number; percent: string; swatch: Swatch }
+
+/** A breakdown as segments: `ordered` for context sizes (sequential colours), else ranked (categorical). */
+export const segments = (shares: readonly Share[], ordered = false): Segment[] => {
+  const total = shares.reduce((sum, s) => sum + s.spend, 0)
+  if (total <= 0) return []
+  let slot = 0
+  return shares.map((s, i) => ({
+    name: s.name,
+    fraction: s.spend / total,
+    percent: `${Math.round((s.spend / total) * 100)}%`,
+    swatch: ordered
+      ? SEQUENTIAL[Math.min(i, SEQUENTIAL.length - 1)]!
+      : s.name === 'others'
+        ? OTHERS
+        : CATEGORICAL[Math.min(slot++, CATEGORICAL.length - 1)]!,
+  }))
+}
+
+/** The biggest segment's share, for beside the bar. */
+export const topShare = (segs: readonly Segment[]): string =>
+  segs.length === 0 ? '' : segs.reduce((a, b) => (b.fraction > a.fraction ? b : a)).percent
+
+/** Cells per segment, `cells` in all, each at least one; rounding goes to the biggest. */
+const allocate = (segs: readonly Segment[], cells: number): number[] => {
+  const counts = segs.map(s => Math.max(1, Math.round(s.fraction * cells)))
+  let over = counts.reduce((a, b) => a + b, 0) - cells
+  while (over !== 0 && counts.length > 0) {
+    const i = counts.indexOf(Math.max(...counts))
+    counts[i]! -= Math.sign(over)
+    over -= Math.sign(over)
+  }
+  return counts
+}
+
+/** A breakdown as a terminal bar: each segment a run of heavy line in its colour, labelled where it has room. */
+export const terminalSegments = (segs: readonly Segment[], cells: number): { text: string; color: string }[] => {
+  const counts = allocate(segs, cells)
+  return segs.map((s, i) => {
+    const n = counts[i]!
+    const label = ` ${s.name} ${s.percent} `
+    const text = n >= label.length + 2 ? `━${label}${'━'.repeat(n - label.length - 1)}` : '━'.repeat(n)
+    return { text, color: `ansi256(${s.swatch.ansi})` }
+  })
+}
+
+/**
+ * A breakdown as the desktop bar: segments side by side in the rounded track, 2px apart, with the
+ * dot-matrix texture; each labelled inside where it has room. Light and dark colours swap with
+ * the app's theme. Sized like svgBar.
+ */
+export const svgSegments = (segs: readonly Segment[], width: number, id: string): string => {
+  const W = Math.max(60, Math.round(width))
+  let x = 0
+  let classes = ''
+  let dark = ''
+  let marks = ''
+  segs.forEach((s, i) => {
+    const w = s.fraction * W
+    classes += `.${id}-s${i}{fill:${s.swatch.light}}`
+    dark += `.${id}-s${i}{fill:${s.swatch.dark}}`
+    const drawn = Math.max(0, w - (i < segs.length - 1 ? 2 : 0))
+    marks += `<rect class="${id}-s${i}" x="${x.toFixed(1)}" y="0" width="${drawn.toFixed(1)}" height="${HEIGHT}"/>`
+    const label = `${s.name} ${s.percent}`
+    if (drawn >= label.length * 6.8 + 16) {
+      marks +=
+        `<text x="${(x + 9).toFixed(1)}" y="${HEIGHT / 2 + 4.3}" font-family="${FONT}" font-size="12" font-weight="600" fill="${textOn(s.swatch.light)}">` +
+        `${esc(s.name)}<tspan font-weight="500" fill-opacity="0.75"> ${s.percent}</tspan></text>`
+    }
+    x += w
+  })
+  return (
+    `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${HEIGHT + 2 * PAD}" viewBox="0 0 ${W} ${HEIGHT + 2 * PAD}">` +
+    `<style>${classes}@media (prefers-color-scheme: dark){${dark}}</style>` +
+    `<defs>${dotTile(`${id}-dots`, '#ffffff', 0.22)}${dotTile(`${id}-grain`, SVG_TRACK, 0.3)}` +
+    `<clipPath id="${id}-track"><rect width="${W}" height="${HEIGHT}" rx="${HEIGHT / 2}"/></clipPath></defs>` +
+    `<g transform="translate(0 ${PAD})"><g clip-path="url(#${id}-track)">` +
+    `<rect width="${W}" height="${HEIGHT}" fill="${SVG_TRACK}" fill-opacity="0.14"/><rect width="${W}" height="${HEIGHT}" fill="url(#${id}-grain)"/>` +
+    marks +
+    `<rect width="${W}" height="${HEIGHT}" fill="url(#${id}-dots)"/>` +
+    `</g></g></svg>`
   )
 }
 

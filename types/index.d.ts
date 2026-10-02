@@ -69,7 +69,15 @@ export type Stats30 = {
   days: number[]
   /** When it was worked out. */
   at: number
+  /** Spend split by model (fast mode apart), by project folder, misses by cause, and spend by context size; biggest first, the rest as "others" (context: smallest band first). */
+  byModel: Share[]
+  byProject: Share[]
+  byCause: Share[]
+  byContext: Share[]
 }
+
+/** One slice of a breakdown: its name on screen, and USD. */
+export type Share = { name: string; spend: number }
 
 declare module 'claude-code' {
   interface PluginState {

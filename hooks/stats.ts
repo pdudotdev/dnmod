@@ -26,7 +26,10 @@ const REWRITE_MIN_TOKENS = 5_000
 // Recaps are logged a few seconds after their request started (usdash's RECAP_LAG).
 const RECAP_LAG = 5_000
 
-/** One hour's requests (by when each ended): spend, input tokens, misses' extra cost by cause, spend by model family. */
+/**
+ * One hour's requests (by when each ended): spend, input tokens, misses' extra cost by cause, and
+ * spend by model (`claude-opus-5-5`, `claude-opus-5-5 fast`) and by context size (BANDS).
+ */
 export type Bucket = {
   spend: number
   requests: number
@@ -35,10 +38,25 @@ export type Bucket = {
   misses: number
   causes: Record<string, number>
   models: Record<string, number>
+  bands: Record<string, number>
 }
 
-/** One transcript file: its earliest record, and its priced requests by the hour they ended (epoch hour). */
-export type FileSummary = { first: number | null; hours: Record<string, Bucket> }
+/** One transcript file: its earliest record, the folder its session ran in, and its priced requests by the hour they ended (epoch hour). */
+export type FileSummary = { first: number | null; cwd: string | null; hours: Record<string, Bucket> }
+
+/** Bumped whenever FileSummary changes shape, so summaries kept in the store are worked out again. */
+export const SUMMARY_VERSION = 2
+
+/** Context-size bands, by the prompt a request sent: (upper bound, label), as usdash's BANDS. */
+export const BANDS: readonly (readonly [number, string])[] = [
+  [50_000, 'under 50k'],
+  [100_000, '50–100k'],
+  [200_000, '100–200k'],
+  [500_000, '200–500k'],
+  [Infinity, '500k+'],
+]
+
+const bandOf = (prompt: number): string => BANDS.find(([upper]) => prompt < upper)![1]
 
 type TranscriptRecord = {
   type?: string
@@ -50,6 +68,7 @@ type TranscriptRecord = {
   timestamp?: string
   version?: string
   effort?: string
+  cwd?: string
   compactMetadata?: { durationMs?: number }
   message?: { id?: string; model?: string; usage?: Usage }
 }
@@ -128,6 +147,7 @@ export const summarizeFile = (lines: readonly string[], isSubagent: boolean): Fi
   const up = (r: TranscriptRecord | undefined) => (r?.parentUuid ? byUuid.get(r.parentUuid) : undefined)
 
   let first: number | null = null
+  let cwd: string | null = null
   let chain: Chain = {
     key: null,
     prompt: 0,
@@ -193,6 +213,7 @@ export const summarizeFile = (lines: readonly string[], isSubagent: boolean): Fi
   for (const r of records) {
     const at = time(r)
     if (at !== null && (first === null || at < first)) first = at
+    if (r.cwd) cwd = r.cwd
     const message = r.message
     const model = message?.model
     const usage = message?.usage
@@ -249,22 +270,65 @@ export const summarizeFile = (lines: readonly string[], isSubagent: boolean): Fi
     if (price === null) continue
     const cost = requestCost(request.usage, price)
     const hour = String(Math.floor(request.end / HOUR))
-    const bucket = (hours[hour] ??= { spend: 0, requests: 0, read: 0, prompt: 0, misses: 0, causes: {}, models: {} })
+    const bucket = (hours[hour] ??= { spend: 0, requests: 0, read: 0, prompt: 0, misses: 0, causes: {}, models: {}, bands: {} })
     bucket.spend += cost
     bucket.requests += 1
     bucket.read += usageParts(request.usage).read
     bucket.prompt += promptOf(request.usage)
     bucket.misses += request.rewriteCost
     if (request.cause) bucket.causes[request.cause] = (bucket.causes[request.cause] ?? 0) + request.rewriteCost
-    const family = modelKey(request.model) ?? request.model
-    bucket.models[family] = (bucket.models[family] ?? 0) + cost
+    const model = `${modelKey(request.model) ?? request.model}${request.usage.speed === 'fast' ? ' fast' : ''}`
+    bucket.models[model] = (bucket.models[model] ?? 0) + cost
+    const band = bandOf(promptOf(request.usage))
+    bucket.bands[band] = (bucket.bands[band] ?? 0) + cost
   }
-  return { first, hours }
+  return { first, cwd, hours }
 }
 
 /**
  * Merges file summaries over the `period` up to `now` (to the hour). `offsetMinutes` is the
  * machine's time zone, for "the first day the transcripts cover" (usdash's covered_from).
+ */
+/** Where a session ran, as usdash groups them: its folder's path, "no folder" for a Desktop session started without one. */
+const folderKey = (cwd: string | null): string =>
+  cwd === null ? '?' : cwd.includes('/Library/Application Support/Claude/') ? 'no folder' : cwd
+
+/** Each folder's name, with as much of the path before it as tells it apart: "api", or "work/api" and "personal/api". */
+export const folderNames = (keys: readonly string[]): Record<string, string> => {
+  const parts: Record<string, string[]> = {}
+  const depth: Record<string, number> = {}
+  for (const key of keys) {
+    parts[key] = key.startsWith('/') ? key.split('/').filter(p => p !== '') : [key]
+    depth[key] = 1
+  }
+  for (;;) {
+    const names: Record<string, string> = {}
+    for (const key of keys) names[key] = parts[key]!.slice(-depth[key]!).join('/')
+    const seen: Record<string, string[]> = {}
+    for (const key of keys) (seen[names[key]!] ??= []).push(key)
+    const clashes = Object.values(seen).filter(same => same.length > 1).flat().filter(key => depth[key]! < parts[key]!.length)
+    if (clashes.length === 0) return names
+    for (const key of clashes) depth[key]! += 1
+  }
+}
+
+/** The biggest `top` of `values` by spend, the rest folded into "others". */
+const ranked = (values: Record<string, number>, top: number, name: (key: string) => string = k => k) => {
+  const sorted = Object.entries(values)
+    .filter(([, v]) => v > 0)
+    .sort((a, b) => b[1] - a[1])
+  const shares = sorted.slice(0, top).map(([k, v]) => ({ name: name(k), spend: v }))
+  const rest = sorted.slice(top).reduce((sum, [, v]) => sum + v, 0)
+  return rest > 0 ? [...shares, { name: 'others', spend: rest }] : shares
+}
+
+/** A model key as the screen shows it: "Opus 5.5", "Opus 5.5 fast". */
+const modelName = (key: string): string =>
+  key.endsWith(' fast') ? `${prettyModel(key.slice(0, -' fast'.length))} fast` : prettyModel(key)
+
+/**
+ * Merges file summaries over the `period` up to `now` (to the hour). `offsetMinutes` is the
+ * machine's time zone, for the days (the chart's, and usdash's covered_from).
  */
 export const mergeStats = (files: readonly FileSummary[], now: number, period: number, offsetMinutes: number): Stats30 => {
   const start = now - period
@@ -277,8 +341,12 @@ export const mergeStats = (files: readonly FileSummary[], now: number, period: n
   let history: number | null = null
   const causes: Record<string, number> = {}
   const models: Record<string, number> = {}
+  const families: Record<string, number> = {}
+  const bands: Record<string, number> = {}
+  const folders: Record<string, number> = {}
   for (const file of files) {
     if (file.first !== null && (history === null || file.first < history)) history = file.first
+    const folder = folderKey(file.cwd)
     for (const [hour, b] of Object.entries(file.hours)) {
       if (Number(hour) < fromHour) continue
       spend += b.spend
@@ -286,8 +354,14 @@ export const mergeStats = (files: readonly FileSummary[], now: number, period: n
       read += b.read
       prompt += b.prompt
       misses += b.misses
+      folders[folder] = (folders[folder] ?? 0) + b.spend
       for (const [k, v] of Object.entries(b.causes)) causes[k] = (causes[k] ?? 0) + v
-      for (const [k, v] of Object.entries(b.models)) models[k] = (models[k] ?? 0) + v
+      for (const [k, v] of Object.entries(b.models)) {
+        models[k] = (models[k] ?? 0) + v
+        const family = k.replace(/ fast$/, '')
+        families[family] = (families[family] ?? 0) + v
+      }
+      for (const [k, v] of Object.entries(b.bands ?? {})) bands[k] = (bands[k] ?? 0) + v
     }
   }
   const offset = offsetMinutes * 60_000
@@ -303,8 +377,9 @@ export const mergeStats = (files: readonly FileSummary[], now: number, period: n
   const firstDay = history === null ? start : Math.floor((history + offset) / DAY) * DAY - offset
   const coveredFrom = history === null || history <= start ? start : Math.max(start, firstDay)
   const covered = (now - coveredFrom) / DAY
-  const top = Object.entries(models).sort((a, b) => b[1] - a[1])[0]
+  const top = Object.entries(families).sort((a, b) => b[1] - a[1])[0]
   const cause = Object.entries(causes).sort((a, b) => b[1] - a[1])[0]
+  const names = folderNames(Object.keys(folders))
   return {
     spend,
     requests,
@@ -316,5 +391,9 @@ export const mergeStats = (files: readonly FileSummary[], now: number, period: n
     coveredFrom,
     days,
     at: now,
+    byModel: ranked(models, 4, modelName),
+    byProject: ranked(folders, 5, key => names[key] ?? key),
+    byCause: ranked(causes, 5),
+    byContext: BANDS.map(([, label]) => ({ name: label, spend: bands[label] ?? 0 })).filter(b => b.spend > 0),
   }
 }

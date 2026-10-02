@@ -8,10 +8,10 @@ Status on 2026-10-02, `main` of https://github.com/pdudotdev/dnmod (public; see 
 - **Done:**
   - **Steps 1–2** (proof of concept and tests), plus a **first design pass**.
   - **The band:** two rows above the prompt, with a context bar and a cache bar running green to red, the session total, and a `session│30d` switch.
-  - **`/dnmod`:** a side panel. In VS Code, where nothing can draw, it replies in text instead.
+  - **`/dnmod`:** switches the band between this session and the last 30 days. In VS Code, where nothing can draw, it replies in text instead. (The side panel was dropped on 2026-10-02.)
   - **`/dnmod check` and `/dnmod demo`.**
   - **Tests:** 25 pass.
-- **Step 4 (the 30-day view) is built:** the band's `30d` view and the side panel's LAST 30 DAYS, matching usdash's Stats figures exactly on this Mac's 59 transcripts. See [Step 4](#step-4-the-30-day-view).
+- **Step 4 (the 30-day view) is built:** the band's five-row `30d` view, matching usdash's Stats figures exactly on this Mac's 59 transcripts. See [Step 4](#step-4-the-30-day-view).
 - **Step 3 is under way.** Done so far: the **next message's cost**, ported from usdash's engine. The cache pill reads `35:31 left · $0.01 now`, the bar's end cap `then up to $0.28`, and once expired `expired · up to $0.27 to continue` (or `to resume` after an exit). It matches usdash on real sessions. **Today's spend** is done too (`today $0.43 · total $1.20` on the context row), read incrementally and matching usdash to the cent. Still to port: misses and their causes, and Desktop's archived and deleted sessions. Then step 4 (30-day stats) and step 5 (the details panel). See [Next steps](#next-steps).
 - **Before you start:**
   - Load the `plugin-authoring` skill. It writes the API types file, which is the authority.
@@ -21,7 +21,7 @@ Status on 2026-10-02, `main` of https://github.com/pdudotdev/dnmod (public; see 
 
 - **Commits and pushes:** only when the user says so. They have approved each one so far.
 - **Writing for the user:** keep it brief and plain. The user shares dnmod with a team, so the README stays short, accurate and team-facing.
-- **Asking questions:** say exactly which UI element a question is about (the **band** above the prompt, or the **side panel** from `/dnmod`). Ask one open decision at a time, and fold in preferences already stated. Colours can't show in text previews, so offer to show colour choices live (hot reload, or `/dnmod demo`).
+- **Asking questions:** say exactly which UI element a question is about (the **band** above the prompt, its session view or its `30d` view). Ask one open decision at a time, and fold in preferences already stated. Colours can't show in text previews, so offer to show colour choices live (hot reload, or `/dnmod demo`).
 - **Principles (carried over from usdash):** accuracy, reliability, cleanliness. Never show a figure that may be wrong without saying so. Prefer conservative estimates (e.g. a countdown that is a little short rather than a little long). Hold figures to real transcripts in tests.
 - **Standalone:** dnmod must not import, call or need usdash at run time. Port the logic to TypeScript inside dnmod, and copy usdash's fixtures in as dnmod's own tests. Naming usdash as the source in this plan is fine.
 
@@ -29,7 +29,7 @@ Status on 2026-10-02, `main` of https://github.com/pdudotdev/dnmod (public; see 
 
 - **For the session you're in:** how full its context is, its cache countdown, and its spend today and in total.
 - **For a session you resume** (expired or exited): its context, what resuming costs, and its spend today and in total.
-- **30-day figures:** the band's `30d` view. The side panel holds the full breakdown later.
+- **30-day figures:** the band's `30d` view (five rows), which replaced the side panel.
 - **The right machine's data:** the local one, or the remote one when Claude Code runs over SSH (VS Code Remote-SSH, Desktop's SSH connections, `ssh` then `claude`).
 - **Surfaces:** works on the CLI, Desktop (Code tab) and VS Code, and over SSH.
 - **Looks:** professional and easy to take in at a glance, with colour and gradients where they carry meaning.
@@ -52,12 +52,9 @@ Status on 2026-10-02, `main` of https://github.com/pdudotdev/dnmod (public; see 
 - **Cache bar:** fills as the cache ages, so the share is how much of the cache's life is used. Fresh is green and nearly empty; expired is full and red.
 - **Desktop drawing (`svgBar`):** each bar sits in a 24-unit band with 2.5 units of blank above and below (`PAD`), so the two rows' bars don't touch; rows centre their label and figures on the bar (`alignItems="center"`). A rounded, faintly grained track; a dot-matrix fill (2×2 dots, pseudo-random strengths) that brightens toward its edge; tick marks at the quarters; and the pill, with its value bright and the unit dimmer. Light pills get dark text (`textOn`). Modelled on a reference the user liked: a dotted, textured progress bar with a pill at the fill's edge.
 - **Terminal drawing (`terminalBar`):** a coloured heavy line `━` for the fill, the pill in reverse video, and a grey light line `─` for the rest. Heavy against light and the reverse-video pill read even without colour. There are no tick marks: box-drawing notches joined up between the rows into a grid.
-- **`session│30d` switch:** two plain Buttons, the active one bright. The `30d` view is a placeholder: "not computed yet".
+- **`session│30d` switch:** two plain Buttons, the active one bright. The `30d` view has five rows (Spend, Misses, Models, Projects, Context): see [Step 4](#step-4-the-30-day-view-built-2026-10-02).
 
-**`/dnmod`** opens the side panel, in sections:
-- **THIS SESSION:** context and cache bars, wider, with "1h cache" after the countdown, and the total.
-- **LAST 30 DAYS:** a placeholder.
-- **Footer:** host, OS, Claude Code version, and whether the transcript was read. It is filled after `/dnmod` runs its machine check.
+**`/dnmod`** switches the band between the two views. There's no side panel any more: it was dropped on 2026-10-02 because it mostly repeated the band and VS Code can't draw it.
 
 **Other commands:**
 - **`/dnmod` in VS Code** prints the figures as text, because VS Code can't draw ([Surfaces](#surfaces)).
@@ -82,7 +79,7 @@ Status on 2026-10-02, `main` of https://github.com/pdudotdev/dnmod (public; see 
 
 Not built yet:
 - misses and their causes (usdash's `rewrite_reason`, `_classify`), and the tool-list prefix that stays cached on a miss
-- the details panel behind a second button
+- top sessions and the costliest prompts (usdash's `top`, `turns`)
 - releases with version numbers
 
 ## Code map
@@ -98,7 +95,7 @@ Not built yet:
 | `hooks/ledger.ts` | Pure: `addLines` (each request once, at its last record, priced with `requestCost`), `costByDay`, `dayKey`, `parseOffset`. The session's spend by local day. `register.tsx` feeds it new lines with `readNewLines` (a byte cursor per file, `tail -c +N`, several runs past the 4 MiB output cap), from the main transcript and `<session id>/subagents/*.jsonl` |
 | `hooks/prices.ts` | Pure: list prices (`PRICES`, checked 2026-09-29), `modelKey`, `modelVersion`, `pricePaid` (fast mode, US-only), `writePrice` and `promptCost`. Ported from usdash's `prices.py`, `models.py` and `pricing.yaml` |
 | `types/index.d.ts` | State contract: `dnmod.view`, `dnmod.probe`, `dnmod.cache` (a `CacheState`, which carries a `TranscriptState`), `dnmod.demoFrom` |
-| `tests/*.test.ts(x)` | `band` (mounts the band on terminal and desktop, the pane on all four surfaces, and the demo), `command` (`/dnmod` per surface, `check`, usage), `format`, `cache` (synthetic transcripts with the real shapes) |
+| `tests/*.test.ts(x)` | `band` (mounts the band on terminal and desktop, the 30d view's five rows, and the demo), `command` (`/dnmod` per surface, `check`, usage), `format`, `cache` (synthetic transcripts with the real shapes) |
 
 State lives in `$.state` atoms (the host keeps them across hot reloads). Module-level `let`s (`transcriptPath`, `countdownEnd`, `ticks`) start over on each load, which is fine.
 
@@ -194,7 +191,7 @@ The API is **early access** (tested on 2.1.283–2.1.287). Re-check these after 
   - Cache severity is the elapsed share of the TTL.
 - **Pill text is plain words:** `390k / 1M`, `52:10 left`, `expired 4m ago`, `in use`, `no reply yet`. The user found `59:22 left 1h` confusing, so the TTL appears only in the side panel (`1h cache`).
 - **The look:** the user wants professional and polished, not "a home project at its first draft": long aligned bars, texture, ticks and pills, like their reference. Judge every change with a rendered preview before showing it.
-- **The side panel stays secondary.** It uses sections (THIS SESSION, LAST 30 DAYS) and a dim machine footer. Later it gets a second small button for the full breakdown: by day, model and project, the costliest prompts, and the resume costs of other sessions.
+- **No side panel:** dropped on 2026-10-02. The band's `30d` view carries the breakdowns.
 - **30-day stats are computed once and shared** through `$.store` (at most 4 MiB of JSON): whichever session finds the stored copy older than about a minute recomputes it for all.
 - **Resuming:** a resumed session gets the band at once, with the cold-cache `up to $…` before anything is sent.
 
@@ -213,7 +210,7 @@ The API is **early access** (tested on 2.1.283–2.1.287). Re-check these after 
   - **Prices:** paid at the last request's model, speed and region.
   - **Wording:** "next message" while warm, "continuing" once expired, and "resuming" after an exit (a `cost-state` record with nothing typed or sent since).
   - **After `/compact`:** no costs until the next request measures the new size.
-  - **Where it shows:** in the band it lives in the cache bar's pill and end cap. The side panel and the VS Code reply show usdash's full sentence.
+  - **Where it shows:** in the band it lives in the cache bar's pill and end cap. The VS Code reply shows usdash's full sentence.
   - **Checked against usdash** on 2026-10-02 (`python3 -m usdash --once` vs dnmod's `readTranscript` + `resend` on the same transcripts): `continuing re-sends 34k tokens: up to $0.28`, `… 55k tokens: up to $0.44` and `… 34k tokens: up to $0.27` matched exactly. This session's figures differed by one request that landed between the two runs.
 - **Transcript lookup:** `~/.claude/projects/<cwd with non-alphanumerics as '-'>/<session id>.jsonl`. If it isn't there, search the project folders for the session id; retry until the transcript exists. `CLAUDE_CONFIG_DIR` is honoured.
 
@@ -253,9 +250,16 @@ The API is **early access** (tested on 2.1.283–2.1.287). Re-check these after 
 - **Display:**
   - **Spend row:** a 30-day column chart in a calm lavender accent (dot-matrix SVG on Desktop, a `▁▂▃▅▇█` sparkline in the terminal, `·` for empty days), with `$142.14 · $56.89/day`.
   - **Misses row:** a bar filling with the misses' share of spend (red at 25%), pill `$21.80 added by cache misses · mostly cache expired`.
-  - **Side panel and VS Code reply:** usdash-style lines (spend, requests, cached share, misses and their cause, top model).
-- **Known difference:** usdash dates a request's start to the latest attachment beside its trigger, which can fall after the reply began; dnmod uses the trigger's time. It made no difference to these figures. It may be worth fixing in usdash.
-- **Still to do:** the details panel (step 5): by day, model and project, top sessions, costliest prompts.
+  - **VS Code reply:** usdash-style lines (spend, requests, cached share, misses and their cause, top model).
+- **Known difference (a usdash bug):** usdash dates a request's start to the latest attachment beside its trigger. A `deferred_tools_record` attachment can be written *after* the reply has begun.
+  - **Example:** for request `…oesPWXrWdh` in this repo's session transcript, the prompt was at 07:10:34.551 and the reply began at 07:10:49.443. The attachment was written at 07:10:49.444, so usdash dates the request 15 s late.
+  - **Effect on misses:** the next request's idle gap measured 299.5 s instead of 314 s against a 5-minute TTL, so usdash called a $2.70 miss "cause unknown". dnmod calls it "cache expired", which is right. The total misses match ($21.80).
+  - **Effect on the countdown:** usdash's live countdown starts late by the same amount.
+  - **Fix in usdash:** take the trigger's time, not the latest attachment's (or the earlier of that and the first reply).
+- **Breakdowns (2026-10-02, the user's choice):** the side panel is dropped, and the band's 30d view grows to five rows: Spend, Misses (by cause), Models (fast mode apart), Projects, and Context (by size band).
+  - **Segmented bars** (`segments`, `svgSegments`, `terminalSegments` in `hooks/format.ts`): categorical colours from the dataviz skill's validated reference palette (blue, orange, aqua, yellow, magenta; "others" grey), and a single-hue ramp for the ordered context bands. Labels sit inside the segments that have room.
+  - **Matched usdash exactly** for models, projects and context bands.
+  - **Stored summaries** carry `SUMMARY_VERSION` (2), so old ones are worked out again.
 
 - **Port:** `usdash/stats.py` (390 lines). Compute once and share via `$.store`, recomputing only when the stored copy is older than about a minute.
 - **The band's `30d` rows:**
@@ -263,9 +267,9 @@ The API is **early access** (tested on 2.1.283–2.1.287). Re-check these after 
   - `99% cached · misses $1.36 (3%) · Opus 5.5 93% of spend` (wording to settle with the user)
 - **Tests:** hold the figures to hand-worked sums, like usdash's `tests/test_stats.py`.
 
-### Step 5: the details panel and releases
+### Step 5: releases (the details panel was dropped)
 
-- **The panel:** a second small button in the band opens the full breakdown (above).
+- **The panel:** dropped on 2026-10-02. Its breakdowns live in the band's 30d view, and `/dnmod` now switches the band's view. Not yet in dnmod: top sessions and the costliest prompts (usdash's `top` and `turns`), which are text-heavy and band-unfriendly.
 - **Releases:** once dnmod is stable, switch from tracking commits to `version` bumps in `plugin.json`, and mention auto-update in the README.
 
 ### Also pending
@@ -295,4 +299,4 @@ The API is **early access** (tested on 2.1.283–2.1.287). Re-check these after 
   - They asked for a **cache bar that moves green → red**.
   - After seeing it, they asked for it to **fill (not drain)** as the cache ages, to match the context bar.
   - They found `59:22 left 1h` confusing, hence `expires in 59:22`.
-- **`/dnmod` output:** prints nothing in the chat where the panel draws, since a chat reply also enters the model's context. It prints only where nothing draws (VS Code).
+- **`/dnmod` output:** prints nothing in the chat where the band draws, since a chat reply also enters the model's context. It prints only where nothing draws (VS Code).

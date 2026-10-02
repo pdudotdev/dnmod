@@ -1,7 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 
-import { missesModel, statsLines, terminalChart } from '../hooks/format'
-import { mergeStats, summarizeFile } from '../hooks/stats'
+import { missesModel, segments, statsLines, svgSegments, terminalChart, terminalSegments, topShare } from '../hooks/format'
+import { folderNames, mergeStats, summarizeFile } from '../hooks/stats'
 
 const H = 3_600_000
 const t0 = Date.parse('2026-10-02T06:00:00.000Z')
@@ -75,4 +75,36 @@ test('the misses bar, the chart and the lines', () => {
   expect(terminalChart([0, 1, 2], 6)).toBe('··▅▅██')
   expect(statsLines(stats)[0]).toBe('spend $1.61 · 2 requests (transcripts begin 2026-10-02)')
   expect(statsLines({ ...stats, requests: 0 })).toEqual(['no requests in the last 30 days'])
+})
+
+test('segments: shares of the whole, categorical by rank with "others" grey, sequential for ordered bands', () => {
+  const segs = segments([{ name: 'Opus 5.5', spend: 3 }, { name: 'Haiku 4.5', spend: 1 }, { name: 'others', spend: 0 }])
+  expect(segs.map(s => [s.name, s.percent])).toEqual([['Opus 5.5', '75%'], ['Haiku 4.5', '25%'], ['others', '0%']])
+  expect(segs[0]!.swatch.light).toBe('#2a78d6')
+  expect(segs[2]!.swatch.ansi).toBe(245)
+  expect(segments([{ name: 'under 50k', spend: 1 }, { name: '500k+', spend: 1 }], true)[1]!.swatch.light).toBe('#a99ef7')
+  expect(topShare(segs)).toBe('75%')
+  expect(segments([])).toEqual([])
+})
+
+test('terminalSegments fill the cells exactly, labelling the segments with room', () => {
+  const parts = terminalSegments(segments([{ name: 'a', spend: 9 }, { name: 'b', spend: 1 }]), 40)
+  expect(parts.map(p => p.text.length).reduce((x, y) => x + y)).toBe(40)
+  expect(parts[0]!.text.startsWith('━ a 90% ━')).toBe(true)
+  expect(parts[1]!.text).toBe('━━━━')
+})
+
+test('svgSegments labels a segment only where it fits', () => {
+  const svg = svgSegments(segments([{ name: 'usdash', spend: 99 }, { name: 'tiny', spend: 1 }]), 900, 'p')
+  expect(svg).toContain('usdash')
+  expect(svg).not.toContain('>tiny<')
+})
+
+test('folderNames: as much of the path as tells folders apart', () => {
+  expect(folderNames(['/a/work/api', '/b/personal/api', '/c/dnmod', 'no folder'])).toEqual({
+    '/a/work/api': 'work/api',
+    '/b/personal/api': 'personal/api',
+    '/c/dnmod': 'dnmod',
+    'no folder': 'no folder',
+  })
 })
