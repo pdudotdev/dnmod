@@ -21,7 +21,7 @@ dnmod runs inside Claude Code itself, so there's no separate app or server, and 
 ## Install
 
 **You need:**
-- Claude Code 2.1.287 or later.
+- Claude Code 2.1.286 or later in **every** Claude Code app on the machine: the CLI, Desktop and the VS Code extension. Mods are early access and switched on per version, and one older install on the machine can switch them off for the others.
 - Read access to this private repo (ask the owner), and git signed in to GitHub. Either run `gh auth login` then `gh auth setup-git`, or have a GitHub SSH key loaded in your ssh-agent.
 
 **Install once per machine, from a shell.** It then works in the CLI, Desktop and VS Code on that machine:
@@ -46,3 +46,5 @@ Then start a new session, or run `/reload-plugins` in an open one.
 **Update:** `claude plugin marketplace update dnmod && claude plugin update dnmod@dnmod`
 
 **Uninstall:** `claude plugin marketplace remove dnmod` (this also removes the plugin)
+
+**Band or `/dnmod` missing?** Update every Claude Code app on the machine (VS Code: Extensions → Claude Code → Update), then start a new session.
