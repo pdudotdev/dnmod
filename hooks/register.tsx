@@ -99,10 +99,15 @@ export const register: Register = on => {
   on('command.run', { command: 'dnmod' }, async $ => {
     const found = await runProbe($)
     await update($, probe, () => found)
-    const opened = await $.ui.open({ id: PANE, title: 'dnmod' })
 
-    // The pane shows the figures; print them only where it could not be placed.
-    return opened.isPlaced ? {} : { text: probeText(found).join('\n') }
+    // The pane shows everything where a surface draws it. VS Code attaches none (its
+    // engine runs headless, yet ui.open still answers placed), so print the figures there.
+    const isDrawn = found.surfaces.length > 0 && (await $.ui.open({ id: PANE, title: 'dnmod' })).isPlaced
+    if (isDrawn) return {}
+
+    const { context, cost } = await $.session.usage()
+
+    return { text: [sessionLine({ ...context, usd: cost?.usd }), days30Line(), ...probeText(found)].join('\n') }
   })
 
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
