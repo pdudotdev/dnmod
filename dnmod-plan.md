@@ -11,7 +11,7 @@ Status on 2026-10-02, `main` of https://github.com/pdudotdev/dnmod (public; see 
   - **`/dnmod`:** a side panel. In VS Code, where nothing can draw, it replies in text instead.
   - **`/dnmod check` and `/dnmod demo`.**
   - **Tests:** 25 pass.
-- **Next: step 3**, porting usdash's engine to TypeScript for the band's missing figures: today's spend, the next message's cost now and cold, resume cost, and the rest of the cache rules. Then step 4 (30-day stats) and step 5 (the details panel). See [Next steps](#next-steps).
+- **Step 3 is under way.** Done so far: the **next message's cost**, ported from usdash's engine. The cache pill reads `35:31 left · $0.01 now`, the bar's end cap `then up to $0.28`, and once expired `expired · up to $0.27 to continue` (or `to resume` after an exit). It matches usdash on real sessions. Still to port: today's spend, misses and their causes, Desktop's archived and deleted sessions, and incremental transcript reads. Then step 4 (30-day stats) and step 5 (the details panel). See [Next steps](#next-steps).
 - **Before you start:**
   - Load the `plugin-authoring` skill. It writes the API types file, which is the authority.
   - Read [Engine rules](#engine-and-api-rules-learned-the-hard-way) and [The rollout switch](#the-rollout-switch-why-mods-silently-stop-loading). Both cost hours to find.
@@ -78,9 +78,7 @@ Status on 2026-10-02, `main` of https://github.com/pdudotdev/dnmod (public; see 
 
 Not built yet:
 - today's spend
-- the next message's cost (warm, and cold up to the full resend)
-- resume cost
-- cache rules beyond the basic clock: recaps (`away_summary`), `compact_boundary`, misses and their causes
+- misses and their causes (usdash's `rewrite_reason`, `_classify`), and the tool-list prefix that stays cached on a miss
 - the 30-day stats
 - the details panel behind a second button
 - releases with version numbers
@@ -94,8 +92,9 @@ Not built yet:
 | `hooks/hooks.json` | `{ "modules": ["./register.tsx"] }` |
 | `hooks/register.tsx` | Hooks (`session.start`, `turn.complete`, `session.measure`, `command.run` for `/dnmod`, and `ui.render` for `AbovePrompt` and the `Pane`), plus the transcript lookup, the machine check, the cache refresh and the 1 s ticker |
 | `hooks/format.ts` | Pure functions: number formats and `mmss`; the palette `paint(severity, 'terminal' \| 'svg')` and `textOn`; the bar models `contextModel` and `cacheModel` (`fraction`, `severity`, pill `main` and `sub`, `side`); the drawings `svgBar`, `terminalBar` and `textBar`; and `rowLayout` |
-| `hooks/cache.ts` | Pure: `cacheClock(lines)`, the cache clock from transcript JSONL lines |
-| `types/index.d.ts` | State contract: `dnmod.view`, `dnmod.probe`, `dnmod.cache`, `dnmod.demoFrom` |
+| `hooks/cache.ts` | Pure: `readTranscript(lines)`, the main conversation's state from transcript JSONL lines: the cache clock (start, TTL, recaps, compactions), the last request's prompt size, model, speed and region, and whether it's compacted or ended |
+| `hooks/prices.ts` | Pure: list prices (`PRICES`, checked 2026-09-29), `modelKey`, `modelVersion`, `pricePaid` (fast mode, US-only), `writePrice` and `promptCost`. Ported from usdash's `prices.py`, `models.py` and `pricing.yaml` |
+| `types/index.d.ts` | State contract: `dnmod.view`, `dnmod.probe`, `dnmod.cache` (a `CacheState`, which carries a `TranscriptState`), `dnmod.demoFrom` |
 | `tests/*.test.ts(x)` | `band` (mounts the band on terminal and desktop, the pane on all four surfaces, and the demo), `command` (`/dnmod` per surface, `check`, usage), `format`, `cache` (synthetic transcripts with the real shapes) |
 
 State lives in `$.state` atoms (the host keeps them across hot reloads). Module-level `let`s (`transcriptPath`, `countdownEnd`, `ticks`) start over on each load, which is fine.
@@ -196,8 +195,18 @@ The API is **early access** (tested on 2.1.283–2.1.287). Re-check these after 
 - **Cache clock** (`hooks/cache.ts`, from the last 256 KiB of the transcript):
   - **Main thread only:** take the last main-thread request, grouped by `message.id` with `isSidechain` replies excluded.
   - **Start time:** the clock starts at the request's **trigger**. Walk up `parentUuid` from its first reply record, past `attachment` records, to the prompt or tool result. The start is the earlier of that time and the first reply's. Real sessions showed the first reply record arriving up to 1m42s after the request started, so timing from the reply would overstate the time left.
-  - **TTL:** taken from the last cache write. 5 minutes if it wrote any `ephemeral_5m_input_tokens`, otherwise 1 hour if `ephemeral_1h_input_tokens`. A pure cache read keeps the earlier write's TTL. With no write found, it assumes 5 minutes, the conservative choice.
+  - **TTL:** as usdash, from the last request that wrote to the cache: 1 hour if it wrote any `ephemeral_1h_input_tokens`, else 5 minutes if it wrote any 5-minute or unsplit tokens. A pure cache read keeps the earlier write's TTL. With no write found, it assumes 5 minutes.
+  - **Recaps and compactions restart the clock:** an `away_summary` at its time minus 5 s (usdash's `RECAP_LAG`), and a `compact_boundary` at its time minus `compactMetadata.durationMs`, when these are later than the last request.
   - **During a turn:** the band reads `in use`, because each request refreshes the cache. After `turn.complete` the clock is re-read from the transcript.
+- **Next message's cost** (`resend` and `resendLine` in `hooks/format.ts`; usdash's `engine.py`):
+  - **C:** the last main request's prompt (uncached + read + written), with errors and `<synthetic>` replies skipped.
+  - **now** (while warm) = C × the cache-read price.
+  - **up to** (once expired) = C × the cache-write price for the TTL. It's an upper bound, because Claude Code's tool list often stays cached.
+  - **Prices:** paid at the last request's model, speed and region.
+  - **Wording:** "next message" while warm, "continuing" once expired, and "resuming" after an exit (a `cost-state` record with nothing typed or sent since).
+  - **After `/compact`:** no costs until the next request measures the new size.
+  - **Where it shows:** in the band it lives in the cache bar's pill and end cap. The side panel and the VS Code reply show usdash's full sentence.
+  - **Checked against usdash** on 2026-10-02 (`python3 -m usdash --once` vs dnmod's `readTranscript` + `resend` on the same transcripts): `continuing re-sends 34k tokens: up to $0.28`, `… 55k tokens: up to $0.44` and `… 34k tokens: up to $0.27` matched exactly. This session's figures differed by one request that landed between the two runs.
 - **Transcript lookup:** `~/.claude/projects/<cwd with non-alphanumerics as '-'>/<session id>.jsonl`. If it isn't there, search the project folders for the session id; retry until the transcript exists. `CLAUDE_CONFIG_DIR` is honoured.
 
 ## Next steps
@@ -211,10 +220,9 @@ The API is **early access** (tested on 2.1.283–2.1.287). Re-check these after 
 
 **Port:**
 - **Transcript reading:** tolerant JSONL with slim records, plus **incremental reads**. Keep a byte offset per transcript in `$.state` and read only new bytes with `tail -c +N`; mind the 4 MiB caps.
-- **Requests:** grouped by `message.id`, with the request start from the attachment chain (already done for the clock).
-- **Prices:** list prices per model, the fast-mode and US multipliers, and the tokenizer ratio. Per-request cost goes to **today's spend**, and the session total keeps coming from `$.session.usage().cost.usd`. **Check how usdash reconciles the two** (`cost-state` / `claude_total`) before mixing them.
-- **Next message's cost:** "resend now" when warm and "up to" when cold, from usdash's `engine.py`.
-- **Cache-clock effects:** recaps (`away_summary`, which may refresh the cache) and `compact_boundary`. Also misses and their causes, needed for step 4.
+- **Done:** requests grouped by `message.id`, with the start from the attachment chain; prices with the fast-mode and US multipliers (`hooks/prices.ts`); the next message's cost; and recaps and `compact_boundary` on the clock.
+- **Today's spend:** per-request cost summed per local day (`request_cost` in usdash's `prices.py`). The session total keeps coming from `$.session.usage().cost.usd`. **Check how usdash reconciles the two** (`cost-state` / `claude_total`) before mixing them. Local days need the machine's time zone: the plugin environment may run in UTC, so get the offset with `$.process.run(['date', '+%z'])`.
+- **Misses and their causes,** needed for step 4: usdash's `rewrite_reason` and `_classify`, and the tokenizer ratio in `facts.py`/`models.yaml`.
 - **Desktop sessions:** archived and deleted ones, and queued prompts (`queued_command`).
 
 **Tests:** copy usdash's real-transcript fixtures (`tests/fixtures/checks`, 8 redacted sessions from Claude Code 2.1.283) into dnmod. Assert the same figures as usdash's `tests/test_real_checks.py`, so both tools are held to the same numbers. The figures will exist in two places, so fixes must be mirrored.

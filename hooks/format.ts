@@ -2,6 +2,7 @@
 // call it directly.
 
 import type { CacheState } from '../types'
+import { pricePaid, promptCost } from './prices'
 
 export type Figures = {
   percent?: number
@@ -99,10 +100,10 @@ export const contextSeverity = (fraction: number): number => Math.max(0, (fracti
 
 /**
  * One bar: how full, how bad (0 to 1; null for grey), the pill at the fill's edge (`main` bright,
- * `sub` dimmer) and the value beside the bar. Both bars fill toward trouble: context as it grows,
- * the cache as it ages.
+ * `sub` dimmer), the value beside the bar, and an optional cap at the bar's far end (`end`). Both
+ * bars fill toward trouble: context as it grows, the cache as it ages.
  */
-export type BarModel = { fraction: number; severity: number | null; main: string; sub: string; side: string }
+export type BarModel = { fraction: number; severity: number | null; main: string; sub: string; side: string; end: string }
 
 /** The context bar; `demoAt` (0 to 1) sweeps it from empty to full. */
 export const contextModel = (f: Figures, demoAt: number | null): BarModel => {
@@ -114,34 +115,105 @@ export const contextModel = (f: Figures, demoAt: number | null): BarModel => {
       main: tokens(Math.round(demoAt * f.window)),
       sub: `${window} · demo`,
       side: `${Math.round(demoAt * 100)}%`,
+      end: '',
     }
   }
   if (f.percent === undefined || f.tokens === undefined) {
-    return { fraction: 0, severity: null, main: '—', sub: window, side: '—' }
+    return { fraction: 0, severity: null, main: '—', sub: window, side: '—', end: '' }
   }
   const fraction = f.percent / 100
-  return { fraction, severity: contextSeverity(fraction), main: tokens(f.tokens), sub: window, side: `${f.percent}%` }
+  return { fraction, severity: contextSeverity(fraction), main: tokens(f.tokens), sub: window, side: `${f.percent}%`, end: '' }
 }
 
-/** The cache bar, filling as the cache ages; `demoAt` (0 to 1) runs a 1-hour cache to expiry. */
+/**
+ * What the next message re-sends and what that costs (usdash's engine.py): `tokens` read back
+ * from the cache while it's warm (`now`), or written to it again once it has expired (`upTo`, an
+ * upper bound: Claude Code's tool list often stays cached). At the last request's model, speed
+ * and region; `now` and `upTo` are null when its price isn't known. What the message itself adds
+ * isn't known yet, so it's left out.
+ */
+export type Resend =
+  | { kind: 'compacted' }
+  | { kind: 'cost'; verb: 'next message' | 'continuing' | 'resuming'; tokens: number; now: number | null; upTo: number | null }
+
+export const resend = (state: CacheState, now: number): Resend | null => {
+  if (state.kind !== 'clock') return null
+  if (state.compacted) return { kind: 'compacted' }
+  const warm = now < state.since + state.ttlMs
+  const verb = state.ended ? 'resuming' : warm ? 'next message' : 'continuing'
+  const price = pricePaid(state.model, state.speed, state.geo)
+  if (price === null) return { kind: 'cost', verb, tokens: state.prompt, now: null, upTo: null }
+  return {
+    kind: 'cost',
+    verb,
+    tokens: state.prompt,
+    now: warm ? promptCost(price, state.prompt, state.prompt) : null,
+    upTo: promptCost(price, state.prompt, 0, state.ttlMs),
+  }
+}
+
+/** usdash's line, for the side panel and the plain-text reply. */
+export const resendLine = (r: Resend | null): string | null => {
+  if (r === null) return null
+  if (r.kind === 'compacted') return 'compacted: the next message measures the new size'
+  const head = `${r.verb} re-sends ${tokens(r.tokens)} tokens`
+  if (r.upTo === null) return head
+  if (r.now !== null) return `${head}: ${usd(r.now)} now · up to ${usd(r.upTo)} once the cache expires`
+  return `${head}: up to ${usd(r.upTo)}`
+}
+
+/**
+ * The cache bar, filling as the cache ages, with what the next message costs: its pill holds the
+ * time left and the price now, and the cap at the bar's end the price once the cache runs out.
+ * `demoAt` (0 to 1) runs a 1-hour cache to expiry.
+ */
 export const cacheModel = (state: CacheState, now: number, isWorking: boolean, demoAt: number | null): BarModel => {
   if (demoAt !== null) {
     const side = `${Math.round(demoAt * 100)}%`
-    return { fraction: demoAt, severity: demoAt, main: mmss((1 - demoAt) * 3_600_000), sub: ' left · demo', side }
+    return { fraction: demoAt, severity: demoAt, main: `${mmss((1 - demoAt) * 3_600_000)} left`, sub: ' · demo', side, end: '' }
   }
   // Each request of a running turn refreshes the cache.
-  if (isWorking) return { fraction: 0, severity: 0, main: 'in use', sub: '', side: '' }
-  if (state.kind === 'none') return { fraction: 0, severity: null, main: 'no reply yet', sub: '', side: '' }
-  if (state.kind === 'unknown') return { fraction: 0, severity: null, main: 'unknown', sub: '', side: '' }
+  if (isWorking) return { fraction: 0, severity: 0, main: 'in use', sub: '', side: '', end: '' }
+  if (state.kind === 'none') return { fraction: 0, severity: null, main: 'no reply yet', sub: '', side: '', end: '' }
+  if (state.kind === 'unknown') return { fraction: 0, severity: null, main: 'unknown', sub: '', side: '', end: '' }
+
+  const r = resend(state, now)
   const age = now - state.since
+  const to = state.ended ? 'resume' : 'continue'
   if (age >= state.ttlMs) {
-    return { fraction: 1, severity: 1, main: 'expired', sub: ` ${agoText(age - state.ttlMs)}`, side: '100%' }
+    const cost =
+      r?.kind === 'compacted' ? ' · compacted' : r?.kind === 'cost' && r.upTo !== null ? ` · up to ${usd(r.upTo)} to ${to}` : ''
+    const ago = agoText(age - state.ttlMs)
+    const when = ago === 'just now' ? '' : ` · ${ago}`
+    return { fraction: 1, severity: 1, main: 'expired', sub: `${cost}${when}`, side: '100%', end: '' }
   }
   const fraction = Math.max(0, age) / state.ttlMs
-  return { fraction, severity: fraction, main: mmss(state.ttlMs - age), sub: ' left', side: `${Math.round(fraction * 100)}%` }
+  const side = `${Math.round(fraction * 100)}%`
+  const main = `${mmss(state.ttlMs - age)} left`
+  if (r?.kind === 'compacted') return { fraction, severity: fraction, main, sub: ' · compacted', side, end: '' }
+  if (r?.kind !== 'cost' || r.now === null || r.upTo === null) return { fraction, severity: fraction, main, sub: '', side, end: '' }
+  const sub = ` · ${usd(r.now)} ${state.ended ? 'to resume' : 'now'}`
+  return { fraction, severity: fraction, main, sub, side, end: `then up to ${usd(r.upTo)}` }
 }
 
 // --- Drawing -------------------------------------------------------------------------------------
+
+/**
+ * A pill's text within `max` characters: drops `sub`'s trailing " · " parts (the least important
+ * come last), then cuts what's left with an ellipsis.
+ */
+export const fitPill = (main: string, sub: string, max: number): { main: string; sub: string } => {
+  const parts = sub.split(' · ')
+  let kept = sub
+  while ((main + kept).length > max && parts.length > 1) {
+    parts.pop()
+    kept = parts.join(' · ')
+  }
+  if ((main + kept).length <= max) return { main, sub: kept }
+  const text = main + kept
+  const cut = `${text.slice(0, Math.max(1, max - 1)).trimEnd()}…`
+  return { main: cut.slice(0, main.length), sub: cut.slice(main.length) }
+}
 
 const TICKS = [0.25, 0.5, 0.75] as const
 
@@ -153,16 +225,25 @@ export const filled = (fraction: number, width: number): number => {
 
 /**
  * A terminal bar `cells` wide: a heavy line for the fill, the pill in reverse video at its leading
- * edge (inside the fill, or just past it when the fill is short), and a light line for the rest.
- * Heavy against light reads without colour too. (No tick marks: box-drawing notches join up
- * between the two rows into a grid.)
+ * edge (inside the fill, or just past it when the fill is short), a light line for the rest, and
+ * the end cap's text at the far end when there's room. Heavy against light reads without colour
+ * too. (No tick marks: box-drawing notches join up between the two rows into a grid.)
  */
-export const terminalBar = (fraction: number, cells: number, pill: string): { fill: string; pill: string; track: string } => {
-  const label = ` ${pill} `.slice(0, cells)
+export const terminalBar = (
+  fraction: number,
+  cells: number,
+  pill: { main: string; sub: string },
+  endCap = '',
+): { fill: string; pill: string; track: string; end: string } => {
+  const fitted = fitPill(pill.main, pill.sub, cells - 2)
+  const label = ` ${fitted.main}${fitted.sub} `
   const n = filled(fraction, cells)
   const start = Math.min(cells - label.length, n >= label.length ? n - label.length : n)
-  const end = start + label.length
-  return { fill: '━'.repeat(start), pill: label, track: '━'.repeat(Math.max(0, n - end)) + '─'.repeat(cells - Math.max(n, end)) }
+  const after = Math.max(n, start + label.length)
+  const heavy = '━'.repeat(Math.max(0, n - start - label.length))
+  const room = cells - after
+  const end = endCap !== '' && room >= endCap.length + 4 ? ` ${endCap} ` : ''
+  return { fill: '━'.repeat(start), pill: label, track: heavy + '─'.repeat(room - end.length), end }
 }
 
 /** A plain-text bar for the chat reply (VS Code), where nothing is coloured. */
@@ -196,7 +277,8 @@ const dotTile = (id: string, color: string, strength: number): string =>
 
 /**
  * The desktop bar: a rounded, faintly grained track; a dot-matrix fill that brightens toward its
- * edge; notches at the quarters; and the pill riding the fill's leading edge.
+ * edge; notches at the quarters; the pill riding the fill's leading edge; and, when there's room,
+ * an outlined cap at the far end (`end`).
  *
  * Drawn in a viewBox `width` units wide. Given no width, the desktop app draws an SVG at its own
  * width up to the room it has, scaling it down uniformly, so pass more than the room (cells × 9)
@@ -206,9 +288,21 @@ export const svgBar = (m: BarModel, width: number, id: string): string => {
   const W = Math.max(60, Math.round(width))
   const color = paint(m.severity, 'svg')
   const fx = Math.min(1, Math.max(0, m.fraction)) * W
-  const pillW = Math.round((m.main.length + m.sub.length) * 7.1 + 20)
+  const { main, sub } = fitPill(m.main, m.sub, Math.floor((W - 24) / 7.1))
+  const pillW = Math.round((main.length + sub.length) * 7.1 + 20)
   const px = Math.max(0, Math.min(W - pillW, m.fraction >= 0.15 ? fx - pillW : fx + 4))
   const ink = textOn(color)
+  // The cap at the far end, when the pill leaves room for it: its own background keeps it
+  // readable on either theme, dark where the app says it is dark.
+  const capW = m.end === '' ? 0 : Math.round(m.end.length * 6.6 + 18)
+  const capX = W - capW - 2
+  const cap =
+    capW > 0 && px + pillW + 8 <= capX
+      ? `<style>.${id}-cap{fill:#ffffff;fill-opacity:.85}.${id}-capt{fill:#4a4844}` +
+        `@media (prefers-color-scheme: dark){.${id}-cap{fill:#2b2a28}.${id}-capt{fill:#d8d5cf}}</style>` +
+        `<rect class="${id}-cap" x="${capX}" y="2.5" width="${capW}" height="${HEIGHT - 5}" rx="${(HEIGHT - 5) / 2}" stroke="${SVG_TRACK}" stroke-opacity="0.55"/>` +
+        `<text class="${id}-capt" x="${(capX + capW / 2).toFixed(1)}" y="${HEIGHT / 2 + 4.3}" text-anchor="middle" font-family="${FONT}" font-size="12" font-weight="500">${esc(m.end)}</text>`
+      : ''
   const ticks = TICKS.map(t => {
     const on = t * W < fx
     return `<rect x="${(t * W - 0.75).toFixed(1)}" y="6" width="1.5" height="${HEIGHT - 12}" rx="0.75" fill="${on ? '#ffffff' : SVG_TRACK}" fill-opacity="${on ? 0.6 : 0.45}"/>`
@@ -224,8 +318,9 @@ export const svgBar = (m: BarModel, width: number, id: string): string => {
       ? `<g clip-path="url(#${id}-fill)"><rect width="${W}" height="${HEIGHT}" fill="${color}" fill-opacity="0.2"/><rect width="${W}" height="${HEIGHT}" fill="url(#${id}-dots)"/><rect width="${fx.toFixed(1)}" height="${HEIGHT}" fill="url(#${id}-glow)"/></g>`
       : '') +
     ticks +
+    cap +
     `<rect x="${px.toFixed(1)}" y="2" width="${pillW}" height="${HEIGHT - 4}" rx="${(HEIGHT - 4) / 2}" fill="${color}"/>` +
-    `<text x="${(px + pillW / 2).toFixed(1)}" y="${HEIGHT / 2 + 4.5}" text-anchor="middle" font-family="${FONT}" font-size="12.5" font-weight="600" fill="${ink}">${esc(m.main)}<tspan fill-opacity="0.72" font-weight="500">${esc(m.sub)}</tspan></text>` +
+    `<text x="${(px + pillW / 2).toFixed(1)}" y="${HEIGHT / 2 + 4.5}" text-anchor="middle" font-family="${FONT}" font-size="12.5" font-weight="600" fill="${ink}">${esc(main)}<tspan fill-opacity="0.72" font-weight="500">${esc(sub)}</tspan></text>` +
     `</svg>`
   )
 }

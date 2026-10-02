@@ -2,7 +2,7 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register, RenderChildren } from 'claude-code'
 
 import type { CacheState, Probe, View } from '../types'
-import { cacheClock } from './cache'
+import { readTranscript } from './cache'
 import type { BarModel, Paint } from './format'
 import {
   cacheModel,
@@ -10,6 +10,8 @@ import {
   days30Line,
   paint,
   projectFolder,
+  resend,
+  resendLine,
   rowLayout,
   svgBar,
   terminalBar,
@@ -54,8 +56,8 @@ const readCache = async ($: EngineInterface, path: string | null): Promise<Cache
       timeoutMs: 5000,
     })
     if (exitCode !== 0) return { kind: 'unknown', reason: stderr.trim().split('\n')[0] ?? `tail exit ${exitCode}` }
-    const clock = cacheClock(stdout.split('\n'))
-    return clock === null ? { kind: 'none' } : { kind: 'clock', ...clock }
+    const state = readTranscript(stdout.split('\n'))
+    return state === null ? { kind: 'none' } : { kind: 'clock', ...state }
   } catch (error) {
     return { kind: 'unknown', reason: failure(error) }
   }
@@ -213,12 +215,14 @@ export const register: Register = on => {
     const now = await $.clock.now()
     const { context, cost } = await $.session.usage()
     const ctx = contextModel(context, null)
-    const cached = cacheModel(await read($, cache), now, false, null)
+    const state = await read($, cache)
+    const cached = cacheModel(state, now, false, null)
 
     return {
       text: [
         `context ${textBar(ctx.fraction, 24)} ${ctx.side} · ${ctx.main}${ctx.sub} · total ${usd(cost?.usd)}`,
         `cache   ${textBar(cached.fraction, 24)} ${cached.side ? `${cached.side} · ` : ''}${cached.main}${cached.sub}`,
+        ...[resendLine(resend(state, now))].filter((line): line is string => line !== null),
         days30Line(),
         footerText(found),
       ].join('\n'),
@@ -241,13 +245,14 @@ export const register: Register = on => {
 
     const bar = (m: BarModel, id: string, alt: string) => {
       if (e.surface === 'terminal') {
-        const parts = terminalBar(m.fraction, cols.bar, `${m.main}${m.sub}`)
+        const parts = terminalBar(m.fraction, cols.bar, m, m.end)
         const color = paint(m.severity, ink)
         return (
           <Box flexDirection="row">
             <Text color={color}>{parts.fill}</Text>
             <Text inverse bold color={color}>{parts.pill}</Text>
             <Text color={paint(null, ink)}>{parts.track}</Text>
+            <Text dimColor>{parts.end}</Text>
           </Box>
         )
       }
@@ -324,18 +329,20 @@ export const register: Register = on => {
     const ctx = contextModel(context, demoAt)
     const state = await read($, cache)
     const cached = cacheModel(state, now, false, demoAt)
+    const nextLine = demoAt === null ? resendLine(resend(state, now)) : null
     const found = await read($, probe)
     const cols = rowLayout(e.props.bodyColumns, 0)
 
     const bar = (m: BarModel, id: string, alt: string) => {
       if (e.surface === 'terminal') {
-        const parts = terminalBar(m.fraction, cols.bar, `${m.main}${m.sub}`)
+        const parts = terminalBar(m.fraction, cols.bar, m, m.end)
         const color = paint(m.severity, ink)
         return (
           <Box flexDirection="row">
             <Text color={color}>{parts.fill}</Text>
             <Text inverse bold color={color}>{parts.pill}</Text>
             <Text color={paint(null, ink)}>{parts.track}</Text>
+            <Text dimColor>{parts.end}</Text>
           </Box>
         )
       }
@@ -361,6 +368,14 @@ export const register: Register = on => {
         <Text bold>THIS SESSION</Text>
         {row('Context', ctx, bar(ctx, 'context', `context ${ctx.side} full`))}
         {row('Cache', cached, bar(cached, 'cache', `cache ${cached.main}${cached.sub}`))}
+        {nextLine !== null && (
+          <Box flexDirection="row" gap={1}>
+            <Box width={cols.label}>
+              <Text dimColor>Next</Text>
+            </Box>
+            <Text>{nextLine}</Text>
+          </Box>
+        )}
         <Box flexDirection="row" gap={1}>
           <Box width={cols.label}>
             <Text dimColor>Spend</Text>
