@@ -1,0 +1,9 @@
+# Secrets
+.env
+
+# Local planning notes (kept out of the repo)
+dnmod-plan.md
+
+# OS / editor
+.DS_Store
+node_modules/
