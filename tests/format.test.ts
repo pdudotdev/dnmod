@@ -18,6 +18,7 @@ import {
   textBar,
   textOn,
   tokens,
+  usd,
 } from '../hooks/format'
 
 test('mmss counts minutes past 60 and rounds seconds up', () => {
@@ -25,6 +26,13 @@ test('mmss counts minutes past 60 and rounds seconds up', () => {
   expect(mmss(2_832_000)).toBe('47:12')
   expect(mmss(1_500)).toBe('0:02')
   expect(mmss(-5)).toBe('0:00')
+})
+
+test('usd: two decimals, whole dollars from $1,000', () => {
+  expect(usd(0.4)).toBe('$0.40')
+  expect(usd(142.139)).toBe('$142.14')
+  expect(usd(1234.5)).toBe('$1,235')
+  expect(usd(undefined)).toBe('—')
 })
 
 test('tokens drops a trailing .0', () => {

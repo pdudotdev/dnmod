@@ -1,7 +1,7 @@
 // Pure formatting, colours and bar drawing for the band and the pane; no `$` here, so tests can
 // call it directly.
 
-import type { CacheState, Spend } from '../types'
+import type { CacheState, Spend, Stats30 } from '../types'
 import { dayKey } from './ledger'
 import { pricePaid, promptCost } from './prices'
 
@@ -12,9 +12,11 @@ export type Figures = {
   usd?: number
 }
 
+/** `$0.43`, `$142.14`; whole dollars from $1,000 (`$1,234`). */
 export const usd = (value: number | undefined): string => {
   if (value === undefined) return '—'
-  return value < 10 ? `$${value.toFixed(2)}` : `$${value.toFixed(1)}`
+  if (value >= 1000) return `$${Math.round(value).toLocaleString('en-US')}`
+  return `$${value.toFixed(2)}`
 }
 
 export const tokens = (value: number): string => {
@@ -23,7 +25,6 @@ export const tokens = (value: number): string => {
   return String(value)
 }
 
-export const days30Line = (): string => '30d · not computed yet'
 
 /** Claude Code's folder name for a project directory: every non-alphanumeric character becomes '-'. */
 export const projectFolder = (dir: string): string => dir.replace(/[^a-zA-Z0-9]/g, '-')
@@ -388,6 +389,87 @@ export const svgBar = (m: BarModel, width: number, id: string): string => {
     ticks +
     cap +
     pill +
+    `</g></svg>`
+  )
+}
+
+// --- The last 30 days -----------------------------------------------------------------------------
+
+// Spend isn't trouble: the chart takes a calm accent, not the green-to-red scale.
+const ACCENT = { ansi: 141, hex: '#8b7cf6' } as const
+
+export const accent = (on: Paint): string => (on === 'terminal' ? `ansi256(${ACCENT.ansi})` : ACCENT.hex)
+
+/** `$139.60 · $55.94/day` (no per-day figure for a day or less of history). */
+export const spendText = (s: Stats30): string => (s.perDay === null ? usd(s.spend) : `${usd(s.spend)} · ${usd(s.perDay)}/day`)
+
+/** Misses as a bar: the share of spend they added, filling toward red at a quarter. */
+export const missesModel = (s: Stats30): BarModel => {
+  const share = s.spend > 0 ? s.misses / s.spend : 0
+  const percent = `${Math.round(share * 100)}%`
+  const cause = s.topCause === null ? '' : ` · mostly ${s.topCause}`
+  return {
+    fraction: share,
+    severity: s.misses > 0 ? Math.min(1, share / 0.25) : 0,
+    main: usd(s.misses),
+    sub: ` added by cache misses${cause}`,
+    side: percent,
+    end: '',
+  }
+}
+
+/** The side panel's and the plain reply's lines for the last 30 days. */
+export const statsLines = (s: Stats30): string[] => {
+  if (s.requests === 0) return ['no requests in the last 30 days']
+  const since = s.coveredFrom > s.at - 30 * 86_400_000 + 3_600_000 ? ` (transcripts begin ${new Date(s.coveredFrom).toISOString().slice(0, 10)})` : ''
+  const share = s.spend > 0 ? ` (${Math.round((s.misses / s.spend) * 100)}% of spend)` : ''
+  return [
+    `spend ${spendText(s)} · ${s.requests} requests${since}`,
+    ...(s.cached === null ? [] : [`cached ${Math.round(s.cached * 1000) / 10}% of input tokens`]),
+    `cache misses added ${usd(s.misses)}${share}${s.topCause ? `, mostly ${s.topCause}` : ''}`,
+    ...(s.topModel === null ? [] : [`${s.topModel.name}: ${Math.round(s.topModel.share * 100)}% of spend`]),
+  ]
+}
+
+/** The 30 days as a terminal sparkline `cells` wide, today last: one character per day, stretched to fit. */
+export const terminalChart = (days: readonly number[], cells: number): string => {
+  const max = Math.max(...days, 0)
+  const per = Math.max(1, Math.floor(cells / days.length))
+  const marks = '▁▂▃▄▅▆▇█'
+  const chart = days
+    .map(v => (v <= 0 || max <= 0 ? '·' : marks[Math.min(7, Math.round((v / max) * 7))]!).repeat(per))
+    .join('')
+  return (' '.repeat(Math.max(0, cells - chart.length)) + chart).slice(-cells)
+}
+
+/**
+ * The 30 days as a column chart in the bar's track, today on the right and brightest: dot-matrix
+ * columns over the faintly grained track, in the chart's accent. Sized like svgBar.
+ */
+export const svgChart = (days: readonly number[], width: number, id: string): string => {
+  const W = Math.max(60, Math.round(width))
+  const max = Math.max(...days, 0)
+  const step = W / days.length
+  const inner = HEIGHT - 6
+  const columns = days
+    .map((v, i) => {
+      if (v <= 0 || max <= 0) return ''
+      const h = Math.max(2, (v / max) * inner)
+      const x = i * step + step * 0.18
+      const w = step * 0.64
+      const isToday = i === days.length - 1
+      return (
+        `<rect x="${x.toFixed(1)}" y="${(HEIGHT - 3 - h).toFixed(1)}" width="${w.toFixed(1)}" height="${h.toFixed(1)}" rx="1.5" fill="${ACCENT.hex}" fill-opacity="${isToday ? 0.55 : 0.28}"/>` +
+        `<rect x="${x.toFixed(1)}" y="${(HEIGHT - 3 - h).toFixed(1)}" width="${w.toFixed(1)}" height="${h.toFixed(1)}" fill="url(#${id}-dots)" fill-opacity="${isToday ? 1 : 0.8}"/>`
+      )
+    })
+    .join('')
+  return (
+    `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${HEIGHT + 2 * PAD}" viewBox="0 0 ${W} ${HEIGHT + 2 * PAD}">` +
+    `<defs>${dotTile(`${id}-dots`, ACCENT.hex, 1)}${dotTile(`${id}-grain`, SVG_TRACK, 0.3)}` +
+    `<clipPath id="${id}-track"><rect width="${W}" height="${HEIGHT}" rx="${HEIGHT / 2}"/></clipPath></defs>` +
+    `<g transform="translate(0 ${PAD})">` +
+    `<g clip-path="url(#${id}-track)"><rect width="${W}" height="${HEIGHT}" fill="${SVG_TRACK}" fill-opacity="0.14"/><rect width="${W}" height="${HEIGHT}" fill="url(#${id}-grain)"/>${columns}</g>` +
     `</g></svg>`
   )
 }

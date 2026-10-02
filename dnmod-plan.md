@@ -11,6 +11,7 @@ Status on 2026-10-02, `main` of https://github.com/pdudotdev/dnmod (public; see 
   - **`/dnmod`:** a side panel. In VS Code, where nothing can draw, it replies in text instead.
   - **`/dnmod check` and `/dnmod demo`.**
   - **Tests:** 25 pass.
+- **Step 4 (the 30-day view) is built:** the band's `30d` view and the side panel's LAST 30 DAYS, matching usdash's Stats figures exactly on this Mac's 59 transcripts. See [Step 4](#step-4-the-30-day-view).
 - **Step 3 is under way.** Done so far: the **next message's cost**, ported from usdash's engine. The cache pill reads `35:31 left · $0.01 now`, the bar's end cap `then up to $0.28`, and once expired `expired · up to $0.27 to continue` (or `to resume` after an exit). It matches usdash on real sessions. **Today's spend** is done too (`today $0.43 · total $1.20` on the context row), read incrementally and matching usdash to the cent. Still to port: misses and their causes, and Desktop's archived and deleted sessions. Then step 4 (30-day stats) and step 5 (the details panel). See [Next steps](#next-steps).
 - **Before you start:**
   - Load the `plugin-authoring` skill. It writes the API types file, which is the authority.
@@ -81,7 +82,6 @@ Status on 2026-10-02, `main` of https://github.com/pdudotdev/dnmod (public; see 
 
 Not built yet:
 - misses and their causes (usdash's `rewrite_reason`, `_classify`), and the tool-list prefix that stays cached on a miss
-- the 30-day stats
 - the details panel behind a second button
 - releases with version numbers
 
@@ -235,7 +235,22 @@ The API is **early access** (tested on 2.1.283–2.1.287). Re-check these after 
 
 **Tests:** copy usdash's real-transcript fixtures (`tests/fixtures/checks`, 8 redacted sessions from Claude Code 2.1.283) into dnmod. Assert the same figures as usdash's `tests/test_real_checks.py`, so both tools are held to the same numbers. The figures will exist in two places, so fixes must be mirrored.
 
-### Step 4: the 30-day view
+### Step 4: the 30-day view (built 2026-10-02)
+
+- **Engine** (`hooks/stats.ts`):
+  - **Per file:** `summarizeFile` sums one transcript file into hourly buckets: spend, requests, read and prompt tokens, misses' extra cost by cause, and spend by model family. It ports usdash's request accounting: the chain state, `_measure_tool_list`, `_classify` with `REWRITE_SHARE`/`REWRITE_MIN_TOKENS`, and the causes from `rewrite_reason` (grouped). The model facts (`effortKeepsCache`, `convertTokens`, `prettyModel`) are in `hooks/prices.ts`.
+  - **Merge:** `mergeStats` merges over the period to the hour, with per day over the days covered (usdash's `covered_from`) and the last 30 local days for the chart.
+- **Sharing** (`refreshStats30` in `register.tsx`):
+  - **Which files:** `find <projects> -name '*.jsonl' -mtime -31`.
+  - **Per-file cache:** each file's summary goes in `$.store` under `file:<path>` with its size and mtime, so only changed files are read again. Keys for files no longer listed are deleted. A summary that doesn't fit the store's 4 MiB is simply recomputed next time.
+  - **Shared result:** the merged `stats30` is shared through the store too. A session recomputes it when it's older than 2 minutes: 3 s after start, every minute on the :30 tick, and when `30d` is pressed. `/dnmod` awaits it.
+- **Checked against usdash** (`stats._compute` on the same files, back to back): spend $139.5988, 941 requests, $55.9415/day, 98.49% cached, misses $21.8001, Opus 5.5 98.79%, covered from Sep 30. All match exactly.
+- **Display:**
+  - **Spend row:** a 30-day column chart in a calm lavender accent (dot-matrix SVG on Desktop, a `▁▂▃▅▇█` sparkline in the terminal, `·` for empty days), with `$142.14 · $56.89/day`.
+  - **Misses row:** a bar filling with the misses' share of spend (red at 25%), pill `$21.80 added by cache misses · mostly cache expired`.
+  - **Side panel and VS Code reply:** usdash-style lines (spend, requests, cached share, misses and their cause, top model).
+- **Known difference:** usdash dates a request's start to the latest attachment beside its trigger, which can fall after the reply began; dnmod uses the trigger's time. It made no difference to these figures. It may be worth fixing in usdash.
+- **Still to do:** the details panel (step 5): by day, model and project, top sessions, costliest prompts.
 
 - **Port:** `usdash/stats.py` (390 lines). Compute once and share via `$.store`, recomputing only when the stored copy is older than about a minute.
 - **The band's `30d` rows:**

@@ -50,8 +50,29 @@ export type Spend = {
   offsetMinutes: number
 }
 
+/** The last 30 days, across every session on this machine (hooks/stats.ts), as the band and the side panel show them. */
+export type Stats30 = {
+  spend: number
+  requests: number
+  /** Spend a day over the days the transcripts cover, when that's more than a day. */
+  perDay: number | null
+  /** Input tokens read back from the cache, as a share of all input tokens. */
+  cached: number | null
+  /** What cache misses added (writing again what could have been read back), and the biggest cause. */
+  misses: number
+  topCause: string | null
+  /** The model family with the most spend: its name on screen, and its share. */
+  topModel: { name: string; share: number } | null
+  /** Where the data begins: the period's start, or the first day the transcripts cover if later. */
+  coveredFrom: number
+  /** Spend on each of the last 30 local days, today last. */
+  days: number[]
+  /** When it was worked out. */
+  at: number
+}
+
 declare module 'claude-code' {
   interface PluginState {
-    dnmod: { view: View; probe: Probe | null; cache: CacheState; demoFrom: number | null; spend: Spend | null }
+    dnmod: { view: View; probe: Probe | null; cache: CacheState; demoFrom: number | null; spend: Spend | null; stats30: Stats30 | null }
   }
 }

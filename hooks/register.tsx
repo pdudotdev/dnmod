@@ -1,23 +1,30 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register, RenderChildren } from 'claude-code'
 
-import type { CacheState, Probe, Spend, View } from '../types'
+import type { CacheState, Probe, Spend, Stats30, View } from '../types'
 import { readTranscript } from './cache'
 import type { Ledger } from './ledger'
 import { addLines, costByDay, parseOffset } from './ledger'
+import type { FileSummary } from './stats'
+import { mergeStats, summarizeFile } from './stats'
 import type { BarModel, Paint } from './format'
 import {
+  accent,
   cacheModel,
   contextModel,
-  days30Line,
   money,
   paint,
   projectFolder,
   resend,
   resendLine,
   rowLayout,
+  missesModel,
   spendFigures,
+  spendText,
+  statsLines,
   svgBar,
+  svgChart,
+  terminalChart,
   terminalBar,
   textBar,
   ttlText,
@@ -32,6 +39,7 @@ const probe = atom({ plugin: 'dnmod', key: 'probe' } as const, null as Probe | n
 const cache = atom({ plugin: 'dnmod', key: 'cache' } as const, { kind: 'none' } as CacheState)
 const demoFrom = atom({ plugin: 'dnmod', key: 'demoFrom' } as const, null as number | null)
 const spend = atom({ plugin: 'dnmod', key: 'spend' } as const, null as Spend | null)
+const stats30 = atom({ plugin: 'dnmod', key: 'stats30' } as const, null as Stats30 | null)
 
 const failure = (error: unknown): string =>
   `failed: ${error instanceof Error ? error.message : String(error)}`.slice(0, 120)
@@ -161,9 +169,11 @@ const utf8Length = (text: string): number => new TextEncoder().encode(text).leng
  * a run's output stops at 4 MiB, so a big file takes several. A half-written last line waits for
  * the next read; a single line longer than a run's output is skipped.
  */
-const readNewLines = async ($: EngineInterface, path: string): Promise<string[]> => {
-  const cursor = cursors.get(path) ?? { offset: 0, skipLine: false }
-  cursors.set(path, cursor)
+const readNewLines = async (
+  $: EngineInterface,
+  path: string,
+  cursor: { offset: number; skipLine: boolean },
+): Promise<string[]> => {
   const lines: string[] = []
   for (let run = 0; run < 64; run++) {
     const out = await $.process.run(['tail', '-c', `+${cursor.offset + 1}`, path], { timeoutMs: 15_000 })
@@ -197,7 +207,11 @@ const sessionFiles = async ($: EngineInterface): Promise<string[]> => {
 /** Reads what the session's transcripts gained and sums the session's spend by local day. One run at a time. */
 const refreshSpend = async ($: EngineInterface): Promise<void> => {
   spendRun ??= (async () => {
-    for (const path of await sessionFiles($)) addLines(ledger, await readNewLines($, path))
+    for (const path of await sessionFiles($)) {
+      const cursor = cursors.get(path) ?? { offset: 0, skipLine: false }
+      cursors.set(path, cursor)
+      addLines(ledger, await readNewLines($, path, cursor))
+    }
     const zone = await firstLine($, ['date', '+%z']).catch(() => '')
     const offsetMinutes = parseOffset(zone) ?? 0
     const { days, unpriced } = costByDay(ledger, offsetMinutes)
@@ -207,6 +221,63 @@ const refreshSpend = async ($: EngineInterface): Promise<void> => {
     spendRun = null
   })
   return spendRun
+}
+
+// The last 30 days, across every session on this machine. Each file's summary is kept in the
+// store (shared by every session) with the size and time it was summed at, so only files that
+// changed are read again; the merged figures are shared there too, and worked out again by
+// whichever session finds them older than STATS_FRESH.
+const PERIOD = 30 * 86_400_000
+const STATS_FRESH = 120_000
+let statsRun: Promise<void> | null = null
+
+type StoredFile = { size: number; mtimeMs: number; summary: FileSummary }
+
+/** Every transcript, main or subagent's, written to in the last 31 days. */
+const recentTranscripts = async ($: EngineInterface): Promise<string[]> => {
+  const projects = `${await claudeDir($)}/projects`
+  const out = await $.process.run(['find', projects, '-name', '*.jsonl', '-mtime', '-31'], { timeoutMs: 30_000 })
+  return out.stdout.split('\n').filter(line => line.endsWith('.jsonl'))
+}
+
+/** The 30-day figures: the shared copy while fresh, else worked out again (`force` skips the copy). */
+const refreshStats30 = async ($: EngineInterface, force = false): Promise<void> => {
+  statsRun ??= (async () => {
+    const now = await $.clock.now()
+    const shared = (await $.store.get('stats30')) as Stats30 | undefined
+    if (!force && shared !== undefined && now - shared.at < STATS_FRESH) {
+      await update($, stats30, () => shared)
+      return
+    }
+    const summaries: FileSummary[] = []
+    const kept = new Set<string>()
+    for (const path of await recentTranscripts($)) {
+      const key = `file:${path}`
+      kept.add(key)
+      const stat = await $.fs.stat(path).catch(() => null)
+      if (stat === null) continue
+      const stored = (await $.store.get(key)) as StoredFile | undefined
+      if (stored !== undefined && stored.size === stat.size && stored.mtimeMs === stat.mtimeMs) {
+        summaries.push(stored.summary)
+        continue
+      }
+      const lines = await readNewLines($, path, { offset: 0, skipLine: false })
+      const summary = summarizeFile(lines, path.includes('/subagents/'))
+      summaries.push(summary)
+      // The store holds 4 MiB in all: past that a summary isn't kept, and is worked out again next time.
+      await $.store.set(key, { size: stat.size, mtimeMs: stat.mtimeMs, summary }).catch(() => undefined)
+    }
+    for (const key of await $.store.keys()) {
+      if (key.startsWith('file:') && !kept.has(key)) await $.store.delete(key)
+    }
+    const offsetMinutes = parseOffset(await firstLine($, ['date', '+%z']).catch(() => '')) ?? 0
+    const stats = mergeStats(summaries, now, PERIOD, offsetMinutes)
+    await $.store.set('stats30', stats).catch(() => undefined)
+    await update($, stats30, () => stats)
+  })().finally(() => {
+    statsRun = null
+  })
+  return statsRun
 }
 
 /** How far into the demo (0 to 1), or null when none runs. */
@@ -226,13 +297,15 @@ export const register: Register = on => {
     })
     await refreshCache($)
     // A long transcript takes a few reads: don't hold the session's start for them.
-    $.clock.after(0, () => void refreshSpend($))
+    $.clock.after(0, () => void refreshSpend($).catch(() => undefined))
+    $.clock.after(3000, () => void refreshStats30($).catch(() => undefined))
 
     // Redraw for the countdown: each second while it runs, every half minute otherwise
     // (for "expired 4m ago"). Each minute, catch the spend up (subagents, a day rolling over).
     $.clock.every(1000, () => {
       ticks += 1
-      if (ticks % 60 === 0) void refreshSpend($)
+      if (ticks % 60 === 0) void refreshSpend($).catch(() => undefined)
+      if (ticks % 60 === 30) void refreshStats30($).catch(() => undefined)
       void $.clock.now().then(now => {
         if (now < countdownEnd + 1000 || ticks % 30 === 0) $.ui.invalidate('ui.render')
       })
@@ -245,7 +318,7 @@ export const register: Register = on => {
   on('turn.complete', async ($, e, next) => {
     const done = await next(e)
     await refreshCache($)
-    void refreshSpend($)
+    void refreshSpend($).catch(() => undefined)
 
     return done
   })
@@ -276,6 +349,7 @@ export const register: Register = on => {
 
     await refreshCache($)
     await refreshSpend($)
+    await refreshStats30($)
     // The pane shows everything where a surface draws it. VS Code attaches none (its
     // engine runs headless, yet ui.open still answers placed), so print the figures there.
     const isDrawn = found.surfaces.length > 0 && (await $.ui.open({ id: PANE, title: 'dnmod' })).isPlaced
@@ -287,13 +361,14 @@ export const register: Register = on => {
     const state = await read($, cache)
     const cached = cacheModel(state, now, false, null)
     const spent = spendFigures(await read($, spend), cost?.usd, now)
+    const last30 = await read($, stats30)
 
     return {
       text: [
         `context ${textBar(ctx.fraction, 24)} ${ctx.side} · ${ctx.main}${ctx.sub} · today ${money(spent.today)} · total ${money(spent.total)}`,
         `cache   ${textBar(cached.fraction, 24)} ${cached.side ? `${cached.side} · ` : ''}${cached.main}${cached.sub}`,
         ...[resendLine(resend(state, now))].filter((line): line is string => line !== null),
-        days30Line(),
+        ...(last30 === null ? [] : statsLines(last30).map(line => `30d · ${line}`)),
         footerText(found),
       ].join('\n'),
     }
@@ -339,15 +414,15 @@ export const register: Register = on => {
       return <Svg source={svgBar(m, cols.bar * SVG_UNITS_PER_CELL, `dnmod-band-${id}`)} alt={alt} />
     }
 
-    const row = (label: string, m: BarModel | null, middle: RenderChildren, extra: RenderChildren) => (
+    const row = (label: string, dot: string, side: string, middle: RenderChildren, extra: RenderChildren) => (
       <Box flexDirection="row" gap={1} alignItems="center">
         <Box width={cols.label} flexDirection="row" gap={1}>
-          <Text color={paint(m?.severity ?? null, ink)}>●</Text>
+          <Text color={dot}>●</Text>
           <Text>{label}</Text>
         </Box>
         <Box width={cols.bar}>{middle}</Box>
         <Box width={cols.side} justifyContent="flex-end">
-          <Text dimColor>{m?.side ?? ''}</Text>
+          <Text dimColor>{side}</Text>
         </Box>
         <Box width={cols.extra} justifyContent="flex-end">
           {extra}
@@ -370,7 +445,10 @@ export const register: Register = on => {
           plain
           dimColor={shown !== 'days30'}
           label="30d"
-          onPress={() => update($, view, () => 'days30')}
+          onPress={() => {
+            void refreshStats30($).catch(() => undefined)
+            return update($, view, () => 'days30')
+          }}
         />
       </Box>
     )
@@ -385,18 +463,36 @@ export const register: Register = on => {
     )
 
     if (shown === 'days30') {
+      const s = await read($, stats30)
+      const grey = paint(null, ink)
+      if (s === null) {
+        return (
+          <Box flexDirection="column">
+            {row('Spend', grey, '', <Text dimColor>working out the last 30 days…</Text>, null)}
+            {row('Misses', grey, '', <Text> </Text>, toggle)}
+          </Box>
+        )
+      }
+      const misses = missesModel(s)
+      let chart: RenderChildren
+      if (e.surface === 'terminal') {
+        chart = <Text color={accent(ink)}>{terminalChart(s.days, cols.bar)}</Text>
+      } else {
+        const { Svg } = $.ui.resolve(e)
+        chart = <Svg source={svgChart(s.days, cols.bar * SVG_UNITS_PER_CELL, 'dnmod-band-chart')} alt="spend by day, last 30 days" />
+      }
       return (
         <Box flexDirection="column">
-          {row('30 days', null, <Text dimColor>not computed yet</Text>, total)}
-          {row('', null, <Text dimColor>coming in a later version</Text>, toggle)}
+          {row('Spend', accent(ink), '30d', chart, <Text bold>{spendText(s)}</Text>)}
+          {row('Misses', paint(misses.severity, ink), misses.side, bar(misses, 'misses', `cache misses ${misses.main}`), toggle)}
         </Box>
       )
     }
 
     return (
       <Box flexDirection="column">
-        {row('Context', ctx, bar(ctx, 'context', `context ${ctx.side} full`), total)}
-        {row('Cache', cached, bar(cached, 'cache', `cache ${cached.main}${cached.sub}`), toggle)}
+        {row('Context', paint(ctx.severity, ink), ctx.side, bar(ctx, 'context', `context ${ctx.side} full`), total)}
+        {row('Cache', paint(cached.severity, ink), cached.side, bar(cached, 'cache', `cache ${cached.main}${cached.sub}`), toggle)}
       </Box>
     )
   })
@@ -414,6 +510,7 @@ export const register: Register = on => {
     const found = await read($, probe)
     const cols = rowLayout(e.props.bodyColumns, 0)
     const spent = spendFigures(await read($, spend), cost?.usd, now)
+    const last30 = await read($, stats30)
 
     const bar = (m: BarModel, id: string, alt: string) => {
       if (e.surface === 'terminal') {
@@ -478,7 +575,11 @@ export const register: Register = on => {
         </Box>
         <Text> </Text>
         <Text bold>LAST 30 DAYS</Text>
-        <Text dimColor>not computed yet</Text>
+        {last30 === null ? (
+          <Text dimColor>working them out…</Text>
+        ) : (
+          statsLines(last30).map(line => <Text>{line}</Text>)
+        )}
         <Text> </Text>
         <Text dimColor>{found === null ? 'Run /dnmod check to check this machine.' : footerText(found)}</Text>
       </Box>

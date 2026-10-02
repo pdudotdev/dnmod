@@ -61,7 +61,7 @@ test('the terminal band shows context, then the cache, and toggles to 30 days', 
   expect(await ui.find({ type: 'Text', text: ' no reply yet' })).toBeDefined()
 
   await ui.press({ key: 'show-30d' })
-  expect(await ui.find({ type: 'Text', text: '30 days' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: 'working out the last 30 days…' })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: '45%' })).toBeUndefined()
 
   await ui.press({ key: 'show-session' })

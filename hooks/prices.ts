@@ -154,3 +154,40 @@ export const requestCost = (usage: Usage, price: Price): number => {
     p.output * price.output
   return tokens / 1_000_000 + p.searches * WEB_SEARCH_USD
 }
+
+// What dnmod knows about models besides their prices (usdash's facts.py and models.yaml, checked
+// 2026-09-29). Both only label why a cache missed.
+
+/** Where Claude Code keeps the cache across an effort change (never on a cloud provider). */
+const EFFORT_KEEPS_CACHE: ReadonlySet<string> = new Set(['claude-opus-5-5', 'claude-sonnet-5-5', 'claude-fable-5-1'])
+/** Models before this version use the old tokenizer, which counts the same text as this share of the tokens. */
+const OLD_TOKENIZER_BEFORE: readonly [number, number] = [4, 7]
+const OLD_TOKENIZER_RATIO = 0.77
+
+/** Bedrock and Vertex spell model ids their own way; there, an effort change re-writes the cache on every model. */
+const onCloudProvider = (model: string | null): boolean => !!model && (model.includes('anthropic.') || model.includes('@'))
+
+export const effortKeepsCache = (model: string | null): boolean =>
+  EFFORT_KEEPS_CACHE.has(modelKey(model) ?? '') && !onCloudProvider(model)
+
+const oldTokenizer = (model: string | null): boolean => {
+  const v = modelVersion(modelKey(model))
+  return v !== null && (v[0] < OLD_TOKENIZER_BEFORE[0] || (v[0] === OLD_TOKENIZER_BEFORE[0] && v[1] < OLD_TOKENIZER_BEFORE[1]))
+}
+
+/** A token count on one model's tokenizer -> roughly the same text on another's. */
+export const convertTokens = (tokens: number, source: string | null, target: string | null): number => {
+  const oldSource = oldTokenizer(source)
+  const oldTarget = oldTokenizer(target)
+  if (oldSource === oldTarget) return tokens
+  return oldTarget ? tokens * OLD_TOKENIZER_RATIO : tokens / OLD_TOKENIZER_RATIO
+}
+
+/** claude-haiku-4-5-20251001 -> Haiku 4.5; anything else as it is. */
+export const prettyModel = (model: string | null): string => {
+  if (!model) return '?'
+  const name = modelKey(model) ?? model
+  const match = /^claude-([a-z]+)-(\d+(?:-\d{1,2})?)$/.exec(name)
+  if (!match) return name
+  return `${match[1]![0]!.toUpperCase()}${match[1]!.slice(1)} ${match[2]!.replace('-', '.')}`
+}

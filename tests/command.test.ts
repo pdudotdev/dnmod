@@ -4,6 +4,7 @@ import type { On, RenderSurface } from 'claude-code'
 /** Answers everything /dnmod asks for, as a Mac with one project and a transcript with no reply yet. */
 const machine = (on: On, surfaces: readonly RenderSurface[]) => {
   mock.clock(on, { now: 1_000 })
+  mock.store(on)
   mock.env(on, { HOME: '/Users/me' })
   on('session.surfaces', () => ({ value: surfaces }))
   on('session.version', () => ({ value: { version: '2.1.287' } }))
@@ -55,7 +56,7 @@ test('/dnmod prints the figures where nothing draws, as in VS Code', async ($, o
   expect((ran.text ?? '').split('\n')).toEqual([
     `context ${'━'.repeat(11)}${'─'.repeat(13)} 45% · 90k / 200k · today — · total $1.20`,
     `cache   ${'─'.repeat(24)} no reply yet`,
-    '30d · not computed yet',
+    '30d · no requests in the last 30 days',
     'mac · mac · Claude Code 2.1.287 · transcript read',
   ])
 })
@@ -78,6 +79,7 @@ test("today's spend comes from the transcript, read in pieces as a big file need
     JSON.stringify({ type: 'assistant', timestamp: '1970-01-01T00:00:00.500Z', message: { id, model: 'claude-opus-5-5', usage } })
   const file = `${reply('m1')}\n${reply('m2')}\n`
   mock.clock(on, { now: 1_000 })
+  mock.store(on)
   mock.env(on, { HOME: '/Users/me' })
   on('session.surfaces', () => ({ value: [] }))
   on('session.version', () => ({ value: { version: '2.1.287' } }))
