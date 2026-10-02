@@ -129,11 +129,22 @@ const STATS = {
   coveredFrom: 0,
   days: Array.from({ length: 30 }, (_, i) => (i > 26 ? 30 + i : 0)),
   at: 1_000_000,
+  v: 3,
   byModel: [{ name: 'Opus 5.5', spend: 146.41 }, { name: 'others', spend: 1.87 }],
   byProject: [{ name: 'usdash', spend: 81.56 }, { name: 'dnmod', spend: 59.73 }, { name: 'others', spend: 6.99 }],
   byCause: [{ name: 'cache expired', spend: 12.55 }, { name: 'cause unknown', spend: 9.25 }],
   byContext: [{ name: 'under 50k', spend: 6.78 }, { name: '500k+', spend: 141.5 }],
 }
+
+test("figures shared in another version's shape aren't used: the view waits for its own", async ($, on) => {
+  usage(on)
+  mock.clock(on, { now: 1_030_000 })
+  mock.store(on, { stats30: { ...STATS, v: 2 } })
+  const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
+  await ui.press({ key: 'show-30d' })
+  expect(await ui.find({ type: 'Text', text: 'Projects' })).toBeUndefined()
+  await ui.unmount()
+})
 
 for (const surface of ['terminal', 'desktop'] as const) {
   test(`the 30d view shows spend, misses, models, projects and context from the shared figures on ${surface}`, async ($, on) => {

@@ -47,6 +47,13 @@ export type FileSummary = { first: number | null; cwd: string | null; hours: Rec
 /** Bumped whenever FileSummary changes shape, so summaries kept in the store are worked out again. */
 export const SUMMARY_VERSION = 2
 
+/**
+ * Bumped whenever Stats30 changes shape. The merged figures are shared through the store by every
+ * running session, and an open session keeps running the version it started with, so a version
+ * uses only figures written in its own shape.
+ */
+export const STATS_VERSION = 3
+
 /** Context-size bands, by the prompt a request sent: (upper bound, label), as usdash's BANDS. */
 export const BANDS: readonly (readonly [number, string])[] = [
   [50_000, 'under 50k'],
@@ -391,6 +398,7 @@ export const mergeStats = (files: readonly FileSummary[], now: number, period: n
     coveredFrom,
     days,
     at: now,
+    v: STATS_VERSION,
     byModel: ranked(models, 4, modelName),
     byProject: ranked(folders, 5, key => names[key] ?? key),
     byCause: ranked(causes, 5),

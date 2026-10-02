@@ -67,8 +67,9 @@ export type Stats30 = {
   coveredFrom: number
   /** Spend on each of the last 30 local days, today last. */
   days: number[]
-  /** When it was worked out. */
+  /** When it was worked out, and in which shape (STATS_VERSION). */
   at: number
+  v: number
   /** Spend split by model (fast mode apart), by project folder, misses by cause, and spend by context size; biggest first, the rest as "others" (context: smallest band first). */
   byModel: Share[]
   byProject: Share[]

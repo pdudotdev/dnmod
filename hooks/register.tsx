@@ -6,7 +6,7 @@ import { readTranscript } from './cache'
 import type { Ledger } from './ledger'
 import { addLines, costByDay, parseOffset } from './ledger'
 import type { FileSummary } from './stats'
-import { mergeStats, summarizeFile, SUMMARY_VERSION } from './stats'
+import { mergeStats, STATS_VERSION, summarizeFile, SUMMARY_VERSION } from './stats'
 import type { BarModel, Paint } from './format'
 import {
   accent,
@@ -264,7 +264,7 @@ const refreshStats30 = async ($: EngineInterface, force = false): Promise<void> 
   statsRun ??= (async () => {
     const now = await $.clock.now()
     const shared = (await $.store.get('stats30').catch(() => undefined)) as Stats30 | undefined
-    if (!force && shared !== undefined && now - shared.at < STATS_FRESH) {
+    if (!force && shared?.v === STATS_VERSION && now - shared.at < STATS_FRESH) {
       await update($, stats30, () => shared)
       return
     }
@@ -494,7 +494,9 @@ export const register: Register = on => {
     )
 
     if (shown === 'days30') {
-      const s = await read($, stats30)
+      const stored = await read($, stats30)
+      // Figures in another version's shape (an older session shares the store) wait for our own.
+      const s = stored?.v === STATS_VERSION ? stored : null
       const grey = paint(null, ink)
       if (s === null || s.requests === 0) {
         return (

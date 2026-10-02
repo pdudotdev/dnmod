@@ -133,6 +133,7 @@ The API is **early access** (tested on 2.1.283–2.1.287). Re-check these after 
 **The store (`$.store`):**
 - **Key length:** keys of 131 characters were taken, but a 260-character key made `$.store.get` reject. Desktop's scratch-folder transcript paths run to about 255 characters. So file summaries are keyed `file:` plus a 64-bit hash of the path (`fileKey`), with the path kept in the value.
 - **Resilience:** a store call that fails must never abort a run. Before this fix the 30-day view sat on "working out…" forever, because one rejected `get` aborted every refresh and the background refresh swallowed the error.
+- **Versions share it:** an open session keeps running the dnmod version it started with, and updates reach only new sessions (or `/reload-plugins`), while all of them share one store. So shared values carry a shape version (`SUMMARY_VERSION`, `STATS_VERSION`), and each version uses only its own shape. Pressing `30d` in a session still on the previous version made the whole band disappear: its drawing failed on figures written in the new shape.
 - **Size:** 4 MiB of JSON in all. Each installed copy has its own file under `~/.claude/plugins/store/` (`dnmod_dnmod-*.json` for the installed copy, `dnmod_inline-*.json` for the dev copy), which is handy for debugging.
 
 **Files and processes:**
