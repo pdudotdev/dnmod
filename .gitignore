@@ -10,3 +10,6 @@ node_modules/
 
 # Written by Claude Code at each load of the mod
 .claude-plugin/types/
+
+# Per-machine Claude Code settings (e.g. the installed dnmod switched off while developing here)
+.claude/settings.local.json

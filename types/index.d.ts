@@ -14,8 +14,14 @@ export type Probe = {
   tail: string
 }
 
+/** The main conversation's prompt cache: no reply yet, a clock, or why it couldn't be read. */
+export type CacheState =
+  | { kind: 'none' }
+  | { kind: 'clock'; since: number; ttlMs: number }
+  | { kind: 'unknown'; reason: string }
+
 declare module 'claude-code' {
   interface PluginState {
-    dnmod: { view: View; probe: Probe | null }
+    dnmod: { view: View; probe: Probe | null; cache: CacheState; demoFrom: number | null }
   }
 }
