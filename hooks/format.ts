@@ -169,7 +169,7 @@ export const resendLine = (r: Resend | null): string | null => {
  */
 export const cacheModel = (state: CacheState, now: number, isWorking: boolean, demoAt: number | null): BarModel => {
   if (demoAt !== null) {
-    const side = `${Math.round(demoAt * 100)}%`
+    const side = `${Math.floor(demoAt * 100)}%`
     return { fraction: demoAt, severity: demoAt, main: `${mmss((1 - demoAt) * 3_600_000)} left`, sub: ' · demo', side, end: '' }
   }
   // Each request of a running turn refreshes the cache.
@@ -188,7 +188,8 @@ export const cacheModel = (state: CacheState, now: number, isWorking: boolean, d
     return { fraction: 1, severity: 1, main: 'expired', sub: `${cost}${when}`, side: '100%', end: '' }
   }
   const fraction = Math.max(0, age) / state.ttlMs
-  const side = `${Math.round(fraction * 100)}%`
+  // Rounded down: 100% only once it has expired.
+  const side = `${Math.floor(fraction * 100)}%`
   const main = `${mmss(state.ttlMs - age)} left`
   if (r?.kind === 'compacted') return { fraction, severity: fraction, main, sub: ' · compacted', side, end: '' }
   if (r?.kind !== 'cost' || r.now === null || r.upTo === null) return { fraction, severity: fraction, main, sub: '', side, end: '' }
@@ -292,6 +293,8 @@ const esc = (text: string): string => text.replace(/&/g, '&amp;').replace(/</g, 
 
 const FONT = `-apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif`
 const HEIGHT = 24
+// Blank above and below each bar, so the two rows' bars don't touch.
+const PAD = 2.5
 
 // The fill's dot matrix: a 24x12 tile of 2x2 dots on a 3px grid, at fixed pseudo-random strengths.
 const DOTS = ((): number[] => {
@@ -327,7 +330,7 @@ export const svgBar = (m: BarModel, width: number, id: string): string => {
   const { main, sub } = fitPill(m.main, m.sub, Math.floor((W - 24) / 7.1))
   const pillW = Math.round((main.length + sub.length) * 7.1 + 20)
   const capW = m.end === '' ? 0 : Math.round(m.end.length * 6.6 + 18)
-  const place = placePill(fx, pillW, W, capW + 2, 6)
+  const place = placePill(fx, pillW, W, capW > 0 ? capW + 2 : 0, 6)
   const px = place.at
   const capX = W - capW - 2
   // Outlined pieces (the cap, and the pill past the fill) carry their own background, light or
@@ -351,12 +354,13 @@ export const svgBar = (m: BarModel, width: number, id: string): string => {
     return `<rect x="${(t * W - 0.75).toFixed(1)}" y="6" width="1.5" height="${HEIGHT - 12}" rx="0.75" fill="${on ? '#ffffff' : SVG_TRACK}" fill-opacity="${on ? 0.6 : 0.45}"/>`
   }).join('')
   return (
-    `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${HEIGHT}" viewBox="0 0 ${W} ${HEIGHT}">` +
+    `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${HEIGHT + 2 * PAD}" viewBox="0 0 ${W} ${HEIGHT + 2 * PAD}">` +
     style +
     `<defs>${dotTile(`${id}-dots`, color, 1)}${dotTile(`${id}-grain`, SVG_TRACK, 0.3)}` +
     `<linearGradient id="${id}-glow" x1="0" x2="1"><stop offset="0" stop-color="${color}" stop-opacity="0.08"/><stop offset="1" stop-color="${color}" stop-opacity="0.5"/></linearGradient>` +
     `<clipPath id="${id}-track"><rect width="${W}" height="${HEIGHT}" rx="${HEIGHT / 2}"/></clipPath>` +
     `<clipPath id="${id}-fill"><rect width="${fx.toFixed(1)}" height="${HEIGHT}" rx="${HEIGHT / 2}"/></clipPath></defs>` +
+    `<g transform="translate(0 ${PAD})">` +
     `<g clip-path="url(#${id}-track)"><rect width="${W}" height="${HEIGHT}" fill="${SVG_TRACK}" fill-opacity="0.14"/><rect width="${W}" height="${HEIGHT}" fill="url(#${id}-grain)"/></g>` +
     (fx > 0
       ? `<g clip-path="url(#${id}-fill)"><rect width="${W}" height="${HEIGHT}" fill="${color}" fill-opacity="0.2"/><rect width="${W}" height="${HEIGHT}" fill="url(#${id}-dots)"/><rect width="${fx.toFixed(1)}" height="${HEIGHT}" fill="url(#${id}-glow)"/></g>`
@@ -364,7 +368,7 @@ export const svgBar = (m: BarModel, width: number, id: string): string => {
     ticks +
     cap +
     pill +
-    `</svg>`
+    `</g></svg>`
   )
 }
 

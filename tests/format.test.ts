@@ -119,6 +119,7 @@ test('the cache bar: time left and the price now in its pill, the price once exp
     ' · up to $0.44 to resume · 2h 0m ago',
   )
   expect(cacheModel(opus({ compacted: true }), 1_800_000, false, null)).toMatchObject({ sub: ' · compacted', end: '' })
+  expect(cacheModel(opus(), 3_599_000, false, null).side).toBe('99%')
   expect(cacheModel(opus(), 0, true, null).main).toBe('in use')
   expect(cacheModel({ kind: 'none' }, 0, false, null).severity).toBeNull()
   expect(cacheModel({ kind: 'unknown', reason: 'tail failed' }, 0, false, null).main).toBe('unknown')
@@ -184,9 +185,16 @@ test('the SVG bar keeps its end cap up to the end, and outlines a pill that sits
   expect(svgBar({ ...base, fraction: 0.5 }, 160, 'k')).not.toContain('then up to $0.27')
 })
 
+test('at 100% the pill sits flush with the right end', () => {
+  const full = svgBar({ fraction: 1, severity: 1, main: '1M', sub: ' / 1M', side: '100%', end: '' }, 900, 'f')
+  const pillW = Math.round('1M / 1M'.length * 7.1 + 20)
+  expect(full).toContain(`<rect x="${(900 - pillW).toFixed(1)}" y="2" width="${pillW}"`)
+  expect(terminalBar(1, 30, { main: '1M', sub: ' / 1M' })).toMatchObject({ heavy: '', track: '', end: '' })
+})
+
 test('the SVG bar is drawn in its viewBox width, with the pill text escaped', () => {
   const svg = svgBar({ fraction: 0.5, severity: 0, main: '<1k', sub: ' / 1M', side: '50%', end: '' }, 900, 'x')
-  expect(svg.startsWith('<svg xmlns="http://www.w3.org/2000/svg" width="900" height="24" viewBox="0 0 900 24">')).toBe(true)
+  expect(svg.startsWith('<svg xmlns="http://www.w3.org/2000/svg" width="900" height="29" viewBox="0 0 900 29">')).toBe(true)
   expect(svg).toContain('&lt;1k')
   expect(svg).toContain('id="x-dots"')
 })

@@ -269,7 +269,7 @@ export const register: Register = on => {
     }
 
     const row = (label: string, m: BarModel | null, middle: RenderChildren, extra: RenderChildren) => (
-      <Box flexDirection="row" gap={1}>
+      <Box flexDirection="row" gap={1} alignItems="center">
         <Box width={cols.label} flexDirection="row" gap={1}>
           <Text color={paint(m?.severity ?? null, ink)}>●</Text>
           <Text>{label}</Text>
@@ -367,7 +367,7 @@ export const register: Register = on => {
     }
 
     const row = (label: string, m: BarModel, middle: RenderChildren) => (
-      <Box flexDirection="row" gap={1}>
+      <Box flexDirection="row" gap={1} alignItems="center">
         <Box width={cols.label} flexDirection="row" gap={1}>
           <Text color={paint(m.severity, ink)}>●</Text>
           <Text>{label}</Text>
