@@ -38,8 +38,20 @@ export type CacheState =
   | ({ kind: 'clock' } & TranscriptState)
   | { kind: 'unknown'; reason: string }
 
+/** What this session's logged requests (its subagents' included) cost, by local day (hooks/ledger.ts). */
+export type Spend = {
+  /** Local date ("2026-10-02") -> USD. */
+  days: Record<string, number>
+  /** All days together: what the transcripts log, which Claude Code's own total should reach or pass. */
+  all: number
+  /** Requests whose model has no known price, so not in the sums. */
+  unpriced: number
+  /** The machine's time zone when this was summed, minutes east of UTC. */
+  offsetMinutes: number
+}
+
 declare module 'claude-code' {
   interface PluginState {
-    dnmod: { view: View; probe: Probe | null; cache: CacheState; demoFrom: number | null }
+    dnmod: { view: View; probe: Probe | null; cache: CacheState; demoFrom: number | null; spend: Spend | null }
   }
 }

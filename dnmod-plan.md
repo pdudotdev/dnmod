@@ -11,7 +11,7 @@ Status on 2026-10-02, `main` of https://github.com/pdudotdev/dnmod (public; see 
   - **`/dnmod`:** a side panel. In VS Code, where nothing can draw, it replies in text instead.
   - **`/dnmod check` and `/dnmod demo`.**
   - **Tests:** 25 pass.
-- **Step 3 is under way.** Done so far: the **next message's cost**, ported from usdash's engine. The cache pill reads `35:31 left · $0.01 now`, the bar's end cap `then up to $0.28`, and once expired `expired · up to $0.27 to continue` (or `to resume` after an exit). It matches usdash on real sessions. Still to port: today's spend, misses and their causes, Desktop's archived and deleted sessions, and incremental transcript reads. Then step 4 (30-day stats) and step 5 (the details panel). See [Next steps](#next-steps).
+- **Step 3 is under way.** Done so far: the **next message's cost**, ported from usdash's engine. The cache pill reads `35:31 left · $0.01 now`, the bar's end cap `then up to $0.28`, and once expired `expired · up to $0.27 to continue` (or `to resume` after an exit). It matches usdash on real sessions. **Today's spend** is done too (`today $0.43 · total $1.20` on the context row), read incrementally and matching usdash to the cent. Still to port: misses and their causes, and Desktop's archived and deleted sessions. Then step 4 (30-day stats) and step 5 (the details panel). See [Next steps](#next-steps).
 - **Before you start:**
   - Load the `plugin-authoring` skill. It writes the API types file, which is the authority.
   - Read [Engine rules](#engine-and-api-rules-learned-the-hard-way) and [The rollout switch](#the-rollout-switch-why-mods-silently-stop-loading). Both cost hours to find.
@@ -80,7 +80,6 @@ Status on 2026-10-02, `main` of https://github.com/pdudotdev/dnmod (public; see 
 ### Not built yet
 
 Not built yet:
-- today's spend
 - misses and their causes (usdash's `rewrite_reason`, `_classify`), and the tool-list prefix that stays cached on a miss
 - the 30-day stats
 - the details panel behind a second button
@@ -96,6 +95,7 @@ Not built yet:
 | `hooks/register.tsx` | Hooks (`session.start`, `turn.complete`, `session.measure`, `command.run` for `/dnmod`, and `ui.render` for `AbovePrompt` and the `Pane`), plus the transcript lookup, the machine check, the cache refresh and the 1 s ticker |
 | `hooks/format.ts` | Pure functions: number formats and `mmss`; the palette `paint(severity, 'terminal' \| 'svg')` and `textOn`; the bar models `contextModel` and `cacheModel` (`fraction`, `severity`, pill `main` and `sub`, `side`); the drawings `svgBar`, `terminalBar` and `textBar`; and `rowLayout` |
 | `hooks/cache.ts` | Pure: `readTranscript(lines)`, the main conversation's state from transcript JSONL lines: the cache clock (start, TTL, recaps, compactions), the last request's prompt size, model, speed and region, and whether it's compacted or ended |
+| `hooks/ledger.ts` | Pure: `addLines` (each request once, at its last record, priced with `requestCost`), `costByDay`, `dayKey`, `parseOffset`. The session's spend by local day. `register.tsx` feeds it new lines with `readNewLines` (a byte cursor per file, `tail -c +N`, several runs past the 4 MiB output cap), from the main transcript and `<session id>/subagents/*.jsonl` |
 | `hooks/prices.ts` | Pure: list prices (`PRICES`, checked 2026-09-29), `modelKey`, `modelVersion`, `pricePaid` (fast mode, US-only), `writePrice` and `promptCost`. Ported from usdash's `prices.py`, `models.py` and `pricing.yaml` |
 | `types/index.d.ts` | State contract: `dnmod.view`, `dnmod.probe`, `dnmod.cache` (a `CacheState`, which carries a `TranscriptState`), `dnmod.demoFrom` |
 | `tests/*.test.ts(x)` | `band` (mounts the band on terminal and desktop, the pane on all four surfaces, and the demo), `command` (`/dnmod` per surface, `check`, usage), `format`, `cache` (synthetic transcripts with the real shapes) |
@@ -224,7 +224,12 @@ The API is **early access** (tested on 2.1.283–2.1.287). Re-check these after 
 **Port:**
 - **Transcript reading:** tolerant JSONL with slim records, plus **incremental reads**. Keep a byte offset per transcript in `$.state` and read only new bytes with `tail -c +N`; mind the 4 MiB caps.
 - **Done:** requests grouped by `message.id`, with the start from the attachment chain; prices with the fast-mode and US multipliers (`hooks/prices.ts`); the next message's cost; and recaps and `compact_boundary` on the clock.
-- **Today's spend:** per-request cost summed per local day (`request_cost` in usdash's `prices.py`). The session total keeps coming from `$.session.usage().cost.usd`. **Check how usdash reconciles the two** (`cost-state` / `claude_total`) before mixing them. Local days need the machine's time zone: the plugin environment may run in UTC, so get the offset with `$.process.run(['date', '+%z'])`.
+- **Done: today's spend.**
+  - **How it's counted:** per-request cost (`requestCost`, usdash's `request_cost`, web searches included), summed on the local day of each request's last record. Main transcript plus subagents.
+  - **Time zone:** from `date +%z`, refreshed on each sum, because the plugin environment may run in UTC.
+  - **Total:** `max(Claude Code's total, the transcripts' sum)`. Claude Code's counts unlogged requests too; a lower figure means it lost history, which is the same reason usdash rejects a short `cost-state`.
+  - **When it refreshes:** at start (deferred), after each turn, each minute, and on `/dnmod`.
+  - **Checked against usdash:** this session $45.90 = $45.90, and `2055` $0.09 = $0.09.
 - **Misses and their causes,** needed for step 4: usdash's `rewrite_reason` and `_classify`, and the tokenizer ratio in `facts.py`/`models.yaml`.
 - **Desktop sessions:** archived and deleted ones, and queued prompts (`queued_command`).
 

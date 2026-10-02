@@ -1,23 +1,26 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register, RenderChildren } from 'claude-code'
 
-import type { CacheState, Probe, View } from '../types'
+import type { CacheState, Probe, Spend, View } from '../types'
 import { readTranscript } from './cache'
+import type { Ledger } from './ledger'
+import { addLines, costByDay, parseOffset } from './ledger'
 import type { BarModel, Paint } from './format'
 import {
   cacheModel,
   contextModel,
   days30Line,
+  money,
   paint,
   projectFolder,
   resend,
   resendLine,
   rowLayout,
+  spendFigures,
   svgBar,
   terminalBar,
   textBar,
   ttlText,
-  usd,
 } from './format'
 
 const PANE = 'dnmod'
@@ -28,6 +31,7 @@ const view = atom({ plugin: 'dnmod', key: 'view' } as const, 'session' as View)
 const probe = atom({ plugin: 'dnmod', key: 'probe' } as const, null as Probe | null)
 const cache = atom({ plugin: 'dnmod', key: 'cache' } as const, { kind: 'none' } as CacheState)
 const demoFrom = atom({ plugin: 'dnmod', key: 'demoFrom' } as const, null as number | null)
+const spend = atom({ plugin: 'dnmod', key: 'spend' } as const, null as Spend | null)
 
 const failure = (error: unknown): string =>
   `failed: ${error instanceof Error ? error.message : String(error)}`.slice(0, 120)
@@ -145,6 +149,66 @@ const refreshCache = async ($: EngineInterface): Promise<void> => {
   await update($, cache, () => state)
 }
 
+// The session's requests, read from its transcripts as they grow: one ledger, a byte offset per file.
+const ledger: Ledger = new Map()
+const cursors = new Map<string, { offset: number; skipLine: boolean }>()
+let spendRun: Promise<void> | null = null
+
+const utf8Length = (text: string): number => new TextEncoder().encode(text).length
+
+/**
+ * The complete lines written to `path` since its cursor. `tail -c +N` reads from a byte offset;
+ * a run's output stops at 4 MiB, so a big file takes several. A half-written last line waits for
+ * the next read; a single line longer than a run's output is skipped.
+ */
+const readNewLines = async ($: EngineInterface, path: string): Promise<string[]> => {
+  const cursor = cursors.get(path) ?? { offset: 0, skipLine: false }
+  cursors.set(path, cursor)
+  const lines: string[] = []
+  for (let run = 0; run < 64; run++) {
+    const out = await $.process.run(['tail', '-c', `+${cursor.offset + 1}`, path], { timeoutMs: 15_000 })
+    if (out.exitCode !== 0 || out.stdout === '') break
+    const lastNewline = out.stdout.lastIndexOf('\n')
+    if (lastNewline === -1) {
+      if (!out.isStdoutTruncated) break
+      cursor.offset += utf8Length(out.stdout)
+      cursor.skipLine = true
+      continue
+    }
+    const complete = out.stdout.slice(0, lastNewline + 1)
+    cursor.offset += utf8Length(complete)
+    const parts = complete.split('\n')
+    lines.push(...(cursor.skipLine ? parts.slice(1) : parts))
+    cursor.skipLine = false
+    if (!out.isStdoutTruncated) break
+  }
+  return lines
+}
+
+/** This session's transcripts: the main one and its subagents' (`<session id>/subagents/*.jsonl`). */
+const sessionFiles = async ($: EngineInterface): Promise<string[]> => {
+  const main = await sessionTranscript($)
+  if (main === null) return []
+  const subagents = `${main.slice(0, -'.jsonl'.length)}/subagents`
+  const entries = await $.fs.list(subagents).catch(() => [])
+  return [main, ...entries.filter(f => f.kind === 'file' && f.name.endsWith('.jsonl')).map(f => `${subagents}/${f.name}`)]
+}
+
+/** Reads what the session's transcripts gained and sums the session's spend by local day. One run at a time. */
+const refreshSpend = async ($: EngineInterface): Promise<void> => {
+  spendRun ??= (async () => {
+    for (const path of await sessionFiles($)) addLines(ledger, await readNewLines($, path))
+    const zone = await firstLine($, ['date', '+%z']).catch(() => '')
+    const offsetMinutes = parseOffset(zone) ?? 0
+    const { days, unpriced } = costByDay(ledger, offsetMinutes)
+    const all = Object.values(days).reduce((sum, cost) => sum + cost, 0)
+    await update($, spend, () => ({ days, all, unpriced, offsetMinutes }))
+  })().finally(() => {
+    spendRun = null
+  })
+  return spendRun
+}
+
 /** How far into the demo (0 to 1), or null when none runs. */
 const demoProgress = (from: number | null, now: number): number | null =>
   from !== null && now >= from && now - from < DEMO_MS ? (now - from) / DEMO_MS : null
@@ -161,11 +225,14 @@ export const register: Register = on => {
       argumentHint: '[check | demo]',
     })
     await refreshCache($)
+    // A long transcript takes a few reads: don't hold the session's start for them.
+    $.clock.after(0, () => void refreshSpend($))
 
     // Redraw for the countdown: each second while it runs, every half minute otherwise
-    // (for "expired 4m ago").
+    // (for "expired 4m ago"). Each minute, catch the spend up (subagents, a day rolling over).
     $.clock.every(1000, () => {
       ticks += 1
+      if (ticks % 60 === 0) void refreshSpend($)
       void $.clock.now().then(now => {
         if (now < countdownEnd + 1000 || ticks % 30 === 0) $.ui.invalidate('ui.render')
       })
@@ -178,6 +245,7 @@ export const register: Register = on => {
   on('turn.complete', async ($, e, next) => {
     const done = await next(e)
     await refreshCache($)
+    void refreshSpend($)
 
     return done
   })
@@ -207,6 +275,7 @@ export const register: Register = on => {
     if (arg === 'check') return { text: probeText(found).join('\n') }
 
     await refreshCache($)
+    await refreshSpend($)
     // The pane shows everything where a surface draws it. VS Code attaches none (its
     // engine runs headless, yet ui.open still answers placed), so print the figures there.
     const isDrawn = found.surfaces.length > 0 && (await $.ui.open({ id: PANE, title: 'dnmod' })).isPlaced
@@ -217,10 +286,11 @@ export const register: Register = on => {
     const ctx = contextModel(context, null)
     const state = await read($, cache)
     const cached = cacheModel(state, now, false, null)
+    const spent = spendFigures(await read($, spend), cost?.usd, now)
 
     return {
       text: [
-        `context ${textBar(ctx.fraction, 24)} ${ctx.side} · ${ctx.main}${ctx.sub} · total ${usd(cost?.usd)}`,
+        `context ${textBar(ctx.fraction, 24)} ${ctx.side} · ${ctx.main}${ctx.sub} · today ${money(spent.today)} · total ${money(spent.total)}`,
         `cache   ${textBar(cached.fraction, 24)} ${cached.side ? `${cached.side} · ` : ''}${cached.main}${cached.sub}`,
         ...[resendLine(resend(state, now))].filter((line): line is string => line !== null),
         days30Line(),
@@ -241,7 +311,8 @@ export const register: Register = on => {
     const ctx = contextModel(context, demoAt)
     const cached = cacheModel(await read($, cache), now, e.props.isWorking, demoAt)
     // The engine draws the band's [-] marker at its top right on the terminal: keep clear of it.
-    const cols = rowLayout(e.props.bodyColumns - (ink === 'terminal' ? 4 : 0), 17)
+    const cols = rowLayout(e.props.bodyColumns - (ink === 'terminal' ? 4 : 0), 26)
+    const spent = spendFigures(await read($, spend), cost?.usd, now)
 
     const bar = (m: BarModel, id: string, alt: string) => {
       if (e.surface === 'terminal') {
@@ -306,8 +377,10 @@ export const register: Register = on => {
 
     const total = (
       <Box flexDirection="row" gap={1}>
-        <Text dimColor>total</Text>
-        <Text bold>{usd(cost?.usd)}</Text>
+        <Text dimColor>today</Text>
+        <Text bold>{money(spent.today)}</Text>
+        <Text dimColor>· total</Text>
+        <Text bold>{money(spent.total)}</Text>
       </Box>
     )
 
@@ -340,6 +413,7 @@ export const register: Register = on => {
     const nextLine = demoAt === null ? resendLine(resend(state, now)) : null
     const found = await read($, probe)
     const cols = rowLayout(e.props.bodyColumns, 0)
+    const spent = spendFigures(await read($, spend), cost?.usd, now)
 
     const bar = (m: BarModel, id: string, alt: string) => {
       if (e.surface === 'terminal') {
@@ -396,8 +470,10 @@ export const register: Register = on => {
           <Box width={cols.label}>
             <Text dimColor>Spend</Text>
           </Box>
-          <Text dimColor>total</Text>
-          <Text bold>{usd(cost?.usd)}</Text>
+          <Text dimColor>today</Text>
+          <Text bold>{money(spent.today)}</Text>
+          <Text dimColor>· total</Text>
+          <Text bold>{money(spent.total)}</Text>
           {state.kind === 'clock' && <Text dimColor>{`· ${ttlText(state.ttlMs)} cache`}</Text>}
         </Box>
         <Text> </Text>

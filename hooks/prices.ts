@@ -105,3 +105,52 @@ export const promptCost = (price: Price, tokens: number, cached: number, ttlMs: 
   const read = Math.min(Math.max(cached, 0), tokens)
   return (read * price.cache_read + (tokens - read) * writePrice(price, ttlMs)) / 1_000_000
 }
+
+/** Server-side web search, USD per search, on top of tokens (web fetch costs only tokens). */
+export const WEB_SEARCH_USD = 10 / 1000
+
+/** A transcript `usage` block, as Claude Code logs it. */
+export type Usage = {
+  input_tokens?: number
+  output_tokens?: number
+  cache_read_input_tokens?: number
+  cache_creation_input_tokens?: number
+  cache_creation?: { ephemeral_1h_input_tokens?: number; ephemeral_5m_input_tokens?: number }
+  server_tool_use?: { web_search_requests?: number }
+  speed?: string
+  inference_geo?: string
+}
+
+const count = (value: unknown): number => (typeof value === 'number' && Number.isFinite(value) ? value : 0)
+
+/**
+ * A usage block's token counts: fresh (uncached) input, read, 5-minute and 1-hour writes, output,
+ * and web searches. Writes without the 5m/1h split count as 5-minute (usdash's usage_parts).
+ */
+export const usageParts = (
+  usage: Usage,
+): { fresh: number; read: number; write5m: number; write1h: number; output: number; searches: number } => {
+  const write1h = count(usage.cache_creation?.ephemeral_1h_input_tokens)
+  const split5 = count(usage.cache_creation?.ephemeral_5m_input_tokens)
+  const unsplit = count(usage.cache_creation_input_tokens) - write1h - split5
+  return {
+    fresh: count(usage.input_tokens),
+    read: count(usage.cache_read_input_tokens),
+    write5m: split5 + Math.max(unsplit, 0),
+    write1h,
+    output: count(usage.output_tokens),
+    searches: count(usage.server_tool_use?.web_search_requests),
+  }
+}
+
+/** One request's logged tokens and web searches at the price it paid, in USD (usdash's request_cost). */
+export const requestCost = (usage: Usage, price: Price): number => {
+  const p = usageParts(usage)
+  const tokens =
+    p.fresh * price.input +
+    p.read * price.cache_read +
+    p.write5m * price.cache_write +
+    p.write1h * price.cache_write_1h +
+    p.output * price.output
+  return tokens / 1_000_000 + p.searches * WEB_SEARCH_USD
+}

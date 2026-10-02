@@ -1,7 +1,8 @@
 // Pure formatting, colours and bar drawing for the band and the pane; no `$` here, so tests can
 // call it directly.
 
-import type { CacheState } from '../types'
+import type { CacheState, Spend } from '../types'
+import { dayKey } from './ledger'
 import { pricePaid, promptCost } from './prices'
 
 export type Figures = {
@@ -43,6 +44,25 @@ export const agoText = (ms: number): string => {
   if (minutes < 60) return `${minutes}m ago`
   return `${Math.floor(minutes / 60)}h ${minutes % 60}m ago`
 }
+
+/**
+ * The session's spend today and in total. Today sums its logged requests dated today, local
+ * time. The total is Claude Code's own (it also counts requests transcripts never log: titles,
+ * suggestions), unless the transcripts already show more, which means it lost earlier history
+ * (usdash rejects a short cost-state the same way). Null where unknown.
+ */
+export const spendFigures = (
+  spend: Spend | null,
+  engineTotal: number | undefined,
+  now: number,
+): { today: number | null; total: number | null } => {
+  const today = spend === null ? null : (spend.days[dayKey(now, spend.offsetMinutes)] ?? 0)
+  const totals = [engineTotal, spend?.all].filter((v): v is number => v !== undefined)
+  return { today, total: totals.length === 0 ? null : Math.max(...totals) }
+}
+
+/** `$0.43`, or a dash for nothing yet (as usdash's TODAY column). */
+export const money = (value: number | null): string => (value === null || Math.abs(value) < 1e-9 ? '—' : usd(value))
 
 // --- Colours -------------------------------------------------------------------------------------
 

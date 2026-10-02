@@ -53,7 +53,7 @@ test('/dnmod prints the figures where nothing draws, as in VS Code', async ($, o
   machine(on, [])
   const ran = await $.command.run(dnmod(''))
   expect((ran.text ?? '').split('\n')).toEqual([
-    `context ${'━'.repeat(11)}${'─'.repeat(13)} 45% · 90k / 200k · total $1.20`,
+    `context ${'━'.repeat(11)}${'─'.repeat(13)} 45% · 90k / 200k · today — · total $1.20`,
     `cache   ${'─'.repeat(24)} no reply yet`,
     '30d · not computed yet',
     'mac · mac · Claude Code 2.1.287 · transcript read',
@@ -70,4 +70,36 @@ test('/dnmod check prints the machine check on any surface', async ($, on) => {
 test('/dnmod with an unknown argument says how to use it', async ($, on) => {
   machine(on, ['terminal'])
   expect((await $.command.run(dnmod('nope'))).text).toBe('Usage: /dnmod, /dnmod check or /dnmod demo')
+})
+
+test("today's spend comes from the transcript, read in pieces as a big file needs", async ($, on) => {
+  const usage = { input_tokens: 10, cache_read_input_tokens: 1_000_000, output_tokens: 1_000, cache_creation: {} }
+  const reply = (id: string) =>
+    JSON.stringify({ type: 'assistant', timestamp: '1970-01-01T00:00:00.500Z', message: { id, model: 'claude-opus-5-5', usage } })
+  const file = `${reply('m1')}\n${reply('m2')}\n`
+  mock.clock(on, { now: 1_000 })
+  mock.env(on, { HOME: '/Users/me' })
+  on('session.surfaces', () => ({ value: [] }))
+  on('session.version', () => ({ value: { version: '2.1.287' } }))
+  on('session.id', () => ({ value: 'abc' }))
+  on('session.cwd', () => ({ value: '/Users/me/repo' }))
+  on('session.usage', () => ({
+    value: { startedAt: 0, context: { tokens: 90_000, window: 200_000, percent: 45 }, rateLimits: [], cost: { usd: 1.2 } },
+  }))
+  // `tail -c +N` serves a piece longer than a line but shorter than the file, as a run cut at its
+  // output limit would: the second line is split across two reads.
+  const piece = Math.round(file.length * 0.7)
+  on('process.run', ($, e) => {
+    const from = e.argv[0] === 'tail' && e.argv[2]?.startsWith('+') ? Number(e.argv[2].slice(1)) - 1 : -1
+    const stdout = from >= 0 ? file.slice(from, from + piece) : e.argv[0] === 'tail' ? file.slice(-2048) : '+0000\n'
+    const isStdoutTruncated = from >= 0 && from + piece < file.length
+    return { value: { exitCode: 0, stdout, stderr: '', isStdoutTruncated, isStderrTruncated: false } }
+  })
+  on('fs.exists', () => ({ value: true }))
+  on('fs.list', () => ({ value: [] }))
+  on('fs.stat', () => ({ value: { kind: 'file', size: file.length, mtimeMs: 0, isLink: false } }))
+  on('ui.open', () => ({ value: { isPlaced: true } }))
+
+  const text = (await $.command.run(dnmod(''))).text ?? ''
+  expect(text.split('\n')[0]).toContain('today $0.44 · total $1.20')
 })
