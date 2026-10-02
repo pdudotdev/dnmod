@@ -101,7 +101,7 @@ export const register: Register = on => {
     await update($, probe, () => found)
     await $.ui.open({ id: PANE, title: 'dnmod' })
 
-    return { text: ['dnmod', ...probeText(found)].join('\n') }
+    return { text: probeText(found).join('\n') }
   })
 
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
