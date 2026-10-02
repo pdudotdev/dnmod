@@ -99,9 +99,10 @@ export const register: Register = on => {
   on('command.run', { command: 'dnmod' }, async $ => {
     const found = await runProbe($)
     await update($, probe, () => found)
-    await $.ui.open({ id: PANE, title: 'dnmod' })
+    const opened = await $.ui.open({ id: PANE, title: 'dnmod' })
 
-    return { text: probeText(found).join('\n') }
+    // The pane shows the figures; print them only where it could not be placed.
+    return opened.isPlaced ? {} : { text: probeText(found).join('\n') }
   })
 
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
