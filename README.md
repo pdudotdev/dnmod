@@ -1,19 +1,21 @@
 # dnmod
 
-**TL;DR:** a Claude Code mod that shows, at a glance, how full your session's context is and what the session has cost, with one click to switch to your last 30 days.
+**TL;DR:** a Claude Code mod that shows, at a glance, how full your session's context is, how long its prompt cache stays warm, and what the session has cost, with one click to switch to your last 30 days.
 
-> Early version: the band shows context and session cost. The cache countdown, today's spend, resume cost and the 30-day figures are coming next.
+> Early version: the band shows context, the cache countdown and the session's total. Today's spend, the next message's cost and the 30-day figures are coming next.
 
 ## What you see
 
 | Where | What | Surfaces |
 |---|---|---|
-| **Band** above the prompt | `context 11% (109k of 1.0M) · total $1.74   30 days` | CLI, Desktop |
-| **`30 days`** button in the band | Switches the band between this session and the last 30 days | CLI, Desktop |
-| **`/dnmod`** side panel | The same figures, plus a check of what dnmod can read on this machine | CLI, Desktop |
+| **Band** above the prompt | Two rows. A context bar (`39% · 389k of 1M`) with the session's total, and a cache bar that fills as the cache ages (`expires in 52:10`). Both run green to red | CLI, Desktop |
+| **`session│30d`** in the band | Switches the band between this session and the last 30 days | CLI, Desktop |
+| **`/dnmod`** side panel | The same figures, larger | CLI, Desktop |
 | **`/dnmod`** reply in the chat | The same, as text. VS Code can't draw bands or panels for mods yet | VS Code |
+| **`/dnmod check`** | What dnmod can read on this machine (useful over SSH) | All |
+| **`/dnmod demo`** | 60 seconds of the bars running through their colours | CLI, Desktop |
 
-To press the band's button: click it, or press `ctrl+x tab` and then `Enter`.
+To use the band's switch: click it, or press `ctrl+x tab` and then `Enter`.
 
 ## How it works
 
@@ -23,7 +25,7 @@ dnmod runs inside Claude Code itself, so there's no separate app or server, and 
 
 **You need:**
 - Claude Code 2.1.286 or later in **every** Claude Code app on the machine: the CLI, Desktop and the VS Code extension. Mods are early access and switched on per version, and one older install on the machine can switch them off for the others.
-- Read access to this private repo (ask the owner), and git signed in to GitHub. Either run `gh auth login` then `gh auth setup-git`, or have a GitHub SSH key loaded in your ssh-agent.
+- git: Claude Code downloads dnmod from GitHub with it.
 
 **Install once per machine, from a shell.** It then works in the CLI, Desktop and VS Code on that machine:
 
@@ -47,3 +49,7 @@ Then start a new session. To skip this in future, turn on auto-update: in the CL
 **Uninstall:** `claude plugin marketplace remove dnmod` (this also removes the plugin)
 
 **Band or `/dnmod` missing?** Update every Claude Code app on the machine (VS Code: Extensions → Claude Code → Update), then start a new session.
+
+## Development
+
+See [dnmod-plan.md](dnmod-plan.md) for the design, the mod API's quirks and what's next.
