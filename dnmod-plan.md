@@ -1,6 +1,6 @@
 # dnmod: plan and handoff
 
-Status on 2026-10-02, at commit `c803ef0` on `main` of https://github.com/pdudotdev/dnmod (public). This file is the handoff for the next agent: read it all before changing anything.
+Status on 2026-10-02, `main` of https://github.com/pdudotdev/dnmod (public; see `git log` for the latest commit). This file is the handoff for the next agent: read it all before changing anything.
 
 ## TL;DR
 
@@ -37,15 +37,18 @@ Status on 2026-10-02, at commit `c803ef0` on `main` of https://github.com/pdudot
 
 ### Built (commit `c803ef0`)
 
-**The band** (above the prompt, CLI and Desktop):
+**The band** (above the prompt, CLI and Desktop), in the terminal:
 ```
-context ▰▰▰▰▰▰▰▰▰▰▰▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱ 39% · 389k of 1M                      total $2.31
-cache   ▰▰▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱ expires in 52:10                         session│30d
+● Context  ━━━━━━━━━━━━━━━━━━━━━ 390k / 1M ─────────────────────────────────  39%        total $2.31
+● Cache    ━━━━━━━ 52:10 left ───────────────────────────────────────────────  13%    session│30d
 ```
+- **Row layout:** every row has the same columns, with fixed widths in cells (`rowLayout`): a dot coloured by severity with the label, the bar, the value beside it, then an extra column. The bar gets whatever the others leave, so the bars of both rows start and end at the same x and span the row. On the terminal, rows keep 4 columns clear on the right for the engine's `[-]` band marker.
+- **The pill:** each bar carries a pill at its fill's leading edge, inside the fill or just past it when the fill is short. It holds the bar's value: `390k / 1M`, `52:10 left`, `expired 4m ago`, `in use`, `no reply yet`. The value beside the bar is the fill in per cent.
 - **Context bar:** fills with the context. It stays green to half full, then shades to red when full.
-- **Cache bar:** fills as the cache ages. Fresh is a short green bar; expired is a full red bar reading `expired 4m ago`. While a turn runs it reads `in use`, and before the first reply `no reply yet`.
+- **Cache bar:** fills as the cache ages, so the share is how much of the cache's life is used. Fresh is green and nearly empty; expired is full and red.
+- **Desktop drawing (`svgBar`):** a rounded, faintly grained track; a dot-matrix fill (2×2 dots, pseudo-random strengths) that brightens toward its edge; tick marks at the quarters; and the pill, with its value bright and the unit dimmer. Light pills get dark text (`textOn`). Modelled on a reference the user liked: a dotted, textured progress bar with a pill at the fill's edge.
+- **Terminal drawing (`terminalBar`):** a coloured heavy line `━` for the fill, the pill in reverse video, and a grey light line `─` for the rest. Heavy against light and the reverse-video pill read even without colour. There are no tick marks: box-drawing notches joined up between the rows into a grid.
 - **`session│30d` switch:** two plain Buttons, the active one bright. The `30d` view is a placeholder: "not computed yet".
-- **Layout:** the bars are 10 to 28 cells wide (22% of the band's width). Rows keep 4 columns clear on the right for the engine's `[-]` band marker.
 
 **`/dnmod`** opens the side panel, in sections:
 - **THIS SESSION:** context and cache bars, wider, with "1h cache" after the countdown, and the total.
@@ -66,7 +69,7 @@ cache   ▰▰▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱
 | Where | What was checked | Result |
 |---|---|---|
 | CLI, macOS (2.1.287) | Band, switch, panel, machine check, figures refreshing after each turn, `/cost` agreeing with the band's total | ✓ (the redesign was seen working in the CLI) |
-| Desktop, macOS (2.1.286) | Band, switch, panel only (no chat reply), `$.process.run` (`tail` works) | ✓ for the first version; **the redesign's look (SVG bars) is not checked yet** |
+| Desktop, macOS (2.1.286) | Band, switch, panel only (no chat reply), `$.process.run` (`tail` works) | ✓ for the first version. **Design round 2** (dot-matrix bars, as described above) was previewed in Chromium (Brave, headless) but **is not yet confirmed in the app**. Round 1 had short, misaligned, plain bars, which the user rejected |
 | VS Code, macOS (extension 2.1.287) | dnmod loads; `/dnmod` replies with the figures | ✓; **no band or panel possible** (no surface) |
 | SSH | Not tested | Pending: [Next steps](#next-steps) |
 | Colours in Apple Terminal | Still not visible to the user even after switching to 256-colour codes | Unresolved; the user suspects their terminal theme ([Open issues](#open-issues-and-risks)) |
@@ -90,7 +93,7 @@ Not built yet:
 | `.claude-plugin/marketplace.json` | One-plugin marketplace (`"source": "./"`), so `claude plugin marketplace add pdudotdev/dnmod` works |
 | `hooks/hooks.json` | `{ "modules": ["./register.tsx"] }` |
 | `hooks/register.tsx` | Hooks (`session.start`, `turn.complete`, `session.measure`, `command.run` for `/dnmod`, and `ui.render` for `AbovePrompt` and the `Pane`), plus the transcript lookup, the machine check, the cache refresh and the 1 s ticker |
-| `hooks/format.ts` | Pure functions: number formats, `mmss`, text bars, the colour palette `paint(severity, 'terminal' \| 'svg')`, SVG bars, and the bar models `contextModel` and `cacheModel` |
+| `hooks/format.ts` | Pure functions: number formats and `mmss`; the palette `paint(severity, 'terminal' \| 'svg')` and `textOn`; the bar models `contextModel` and `cacheModel` (`fraction`, `severity`, pill `main` and `sub`, `side`); the drawings `svgBar`, `terminalBar` and `textBar`; and `rowLayout` |
 | `hooks/cache.ts` | Pure: `cacheClock(lines)`, the cache clock from transcript JSONL lines |
 | `types/index.d.ts` | State contract: `dnmod.view`, `dnmod.probe`, `dnmod.cache`, `dnmod.demoFrom` |
 | `tests/*.test.ts(x)` | `band` (mounts the band on terminal and desktop, the pane on all four surfaces, and the demo), `command` (`/dnmod` per surface, `check`, usage), `format`, `cache` (synthetic transcripts with the real shapes) |
@@ -161,24 +164,29 @@ The API is **early access** (tested on 2.1.283–2.1.287). Re-check these after 
 
 ## Surfaces
 
-- **Terminal (CLI):** band and pane. Colours are 256-colour codes. Bars use ▰ and ▱.
-- **Desktop (Code tab):** band and pane. Bars are rounded SVGs (`svgBar`), with colours blended smoothly in hex. **Not visually checked yet.**
+- **Terminal (CLI):** band and pane. Colours are 256-colour codes. Bars are `━` and `─` with a reverse-video pill.
+- **Desktop (Code tab):** band and pane. Bars are dot-matrix SVGs (`svgBar`), with colours blended smoothly in hex.
+  - **Sizing:** Desktop reports widths in cells of its code font, never in pixels, and a `Client` region doesn't measure pixels either. With no `width` prop, Desktop draws an SVG at its markup's own width, capped by the room it has. With fixed width and height, Chromium stretches an SVG image unevenly, squashing its text and dots.
+  - **What dnmod does:** it draws each bar in a viewBox of `cells × 9` units (`SVG_UNITS_PER_CELL`), which is more than a cell's pixels, and passes neither `width` nor `height`. Desktop then scales it **down uniformly** to its fixed-width Box, so the bar fills the box and nothing is distorted.
+  - **Caveat:** this rests on the docs and a Chromium preview, not yet on the app itself.
+  - **Previewing without the app:** render the real `svgBar` and `terminalBar` from `hooks/format.ts` with `npx tsx`, lay them out as Desktop would (`<img style="max-width:100%;height:auto">` in boxes of `cells × ~7.8 px`), and screenshot with a headless Chromium (`Brave Browser --headless=new --screenshot`). Then look at the PNG.
 - **VS Code (extension 2.1.287):** dnmod loads, but the engine runs headless ("session.start: raised (surface none, not interactive)", `$.session.surfaces()` = `[]`). So there's no band and no pane, and `$.ui.open` still answers `placed`. `/dnmod` therefore checks `surfaces.length > 0` and otherwise returns the figures as text (`tests/command.test.ts`). Revisit when the extension attaches as the `vscode` surface.
 - **SSH:** the mod runs inside the engine, so on the remote machine, and reads that machine's `~/.claude`. Install dnmod on the remote. The repo is public, so no GitHub credentials are needed. **To verify:** adapt usdash's manual check 5 (`tests/sanity/manual.py` in usdash). From VS Code Remote-SSH and from Desktop's SSH connection, run `/dnmod check`: the `host:` line must name the remote machine, and the transcript must be the remote one.
 
 ## Design (decided)
 
 - **The band is the main UI.** It has two rows that keep their height: the context row and the cache row. The `30d` view uses the same two rows.
-- **Where step 3's figures go:**
-  - context row, right side: `today $0.43 · total $1.20`
-  - cache row, right side, before the switch: `next msg $0.02` (warm) or `$0.36` (cold)
+- **Where step 3's figures go:** the extra column (`rowLayout`'s `extra`, now 17 cells), widened as needed.
+  - context row: `today $0.43 · total $1.20`
+  - cache row, before the switch: `next msg $0.02` (warm) or `$0.36` (cold)
 - **Both bars fill toward trouble.**
   - Severity runs 0 → 1, green → red, in a muted palette of 256-colour codes: 71 → 107 → 143 → 179 → 173 → 167.
   - The empty track is grey 242.
-  - SVG blends the same colours in hex: `#5faf5f` → `#d75f5f`.
+  - SVG uses brighter hex stops, blended smoothly: `#3fb950` → `#9fc243` → `#e3b341` → `#f0883e` → `#f85149`, with track grey `#8b8b8b`.
   - Context severity is 0 to half full, then rises linearly to 1 when full.
   - Cache severity is the elapsed share of the TTL.
-- **Labels are plain words:** `39% · 389k of 1M`, `expires in 52:10`, `expired 4m ago`, `in use`, `no reply yet`.
+- **Pill text is plain words:** `390k / 1M`, `52:10 left`, `expired 4m ago`, `in use`, `no reply yet`. The user found `59:22 left 1h` confusing, so the TTL appears only in the side panel (`1h cache`).
+- **The look:** the user wants professional and polished, not "a home project at its first draft": long aligned bars, texture, ticks and pills, like their reference. Judge every change with a rendered preview before showing it.
 - **The side panel stays secondary.** It uses sections (THIS SESSION, LAST 30 DAYS) and a dim machine footer. Later it gets a second small button for the full breakdown: by day, model and project, the costliest prompts, and the resume costs of other sessions.
 - **30-day stats are computed once and shared** through `$.store` (at most 4 MiB of JSON): whichever session finds the stored copy older than about a minute recomputes it for all.
 - **Resuming:** a resumed session gets the band at once, with the cold-cache `up to $…` before anything is sent.

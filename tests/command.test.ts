@@ -53,8 +53,8 @@ test('/dnmod prints the figures where nothing draws, as in VS Code', async ($, o
   machine(on, [])
   const ran = await $.command.run(dnmod(''))
   expect((ran.text ?? '').split('\n')).toEqual([
-    'context ▰▰▰▰▰▰▰▰▰▱▱▱▱▱▱▱▱▱▱▱ 45% · 90k of 200k · total $1.20',
-    'cache   ▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱ no reply yet',
+    `context ${'━'.repeat(11)}${'─'.repeat(13)} 45% · 90k / 200k · total $1.20`,
+    `cache   ${'─'.repeat(24)} no reply yet`,
     '30d · not computed yet',
     'mac · mac · Claude Code 2.1.287 · transcript read',
   ])

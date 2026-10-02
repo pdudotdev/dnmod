@@ -8,12 +8,11 @@ import {
   cacheModel,
   contextModel,
   days30Line,
-  EMPTY,
-  filled,
-  FULL,
   paint,
   projectFolder,
+  rowLayout,
   svgBar,
+  terminalBar,
   textBar,
   ttlText,
   usd,
@@ -148,9 +147,9 @@ const refreshCache = async ($: EngineInterface): Promise<void> => {
 const demoProgress = (from: number | null, now: number): number | null =>
   from !== null && now >= from && now - from < DEMO_MS ? (now - from) / DEMO_MS : null
 
-const BAR_CELLS = (columns: number) => Math.min(28, Math.max(10, Math.floor(columns * 0.22)))
-const PANE_CELLS = (columns: number) => Math.min(40, Math.max(10, columns - 32))
-const PX_PER_CELL = 7
+// SVG units per cell: more than a desktop cell's pixels, so the bar is always scaled down (never
+// up) to its box, uniformly. See svgBar.
+const SVG_UNITS_PER_CELL = 9
 
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
@@ -218,8 +217,8 @@ export const register: Register = on => {
 
     return {
       text: [
-        `context ${textBar(ctx.fraction, 20)} ${ctx.value} · ${ctx.note} · total ${usd(cost?.usd)}`,
-        `cache   ${textBar(cached.fraction, 20)} ${cached.value}${cached.note ? ` ${cached.note}` : ''}`,
+        `context ${textBar(ctx.fraction, 24)} ${ctx.side} · ${ctx.main}${ctx.sub} · total ${usd(cost?.usd)}`,
+        `cache   ${textBar(cached.fraction, 24)} ${cached.side ? `${cached.side} · ` : ''}${cached.main}${cached.sub}`,
         days30Line(),
         footerText(found),
       ].join('\n'),
@@ -237,25 +236,43 @@ export const register: Register = on => {
     const { context, cost } = await $.session.usage()
     const ctx = contextModel(context, demoAt)
     const cached = cacheModel(await read($, cache), now, e.props.isWorking, demoAt)
-    const cells = BAR_CELLS(e.props.bodyColumns)
+    // The engine draws the band's [-] marker at its top right on the terminal: keep clear of it.
+    const cols = rowLayout(e.props.bodyColumns - (ink === 'terminal' ? 4 : 0), 17)
 
-    const bar = (m: BarModel, alt: string) => {
+    const bar = (m: BarModel, id: string, alt: string) => {
       if (e.surface === 'terminal') {
-        const n = filled(m.fraction, cells)
+        const parts = terminalBar(m.fraction, cols.bar, `${m.main}${m.sub}`)
+        const color = paint(m.severity, ink)
         return (
           <Box flexDirection="row">
-            <Text color={paint(m.severity, ink)}>{FULL.repeat(n)}</Text>
-            <Text color={paint(null, ink)}>{EMPTY.repeat(cells - n)}</Text>
+            <Text color={color}>{parts.fill}</Text>
+            <Text inverse bold color={color}>{parts.pill}</Text>
+            <Text color={paint(null, ink)}>{parts.track}</Text>
           </Box>
         )
       }
       const { Svg } = $.ui.resolve(e)
-      const width = cells * PX_PER_CELL
-      return <Svg source={svgBar(m.fraction, width, paint(m.severity, ink))} alt={alt} width={width} height={8} />
+      return <Svg source={svgBar(m, cols.bar * SVG_UNITS_PER_CELL, `dnmod-band-${id}`)} alt={alt} />
     }
 
+    const row = (label: string, m: BarModel | null, middle: RenderChildren, extra: RenderChildren) => (
+      <Box flexDirection="row" gap={1}>
+        <Box width={cols.label} flexDirection="row" gap={1}>
+          <Text color={paint(m?.severity ?? null, ink)}>●</Text>
+          <Text>{label}</Text>
+        </Box>
+        <Box width={cols.bar}>{middle}</Box>
+        <Box width={cols.side} justifyContent="flex-end">
+          <Text dimColor>{m?.side ?? ''}</Text>
+        </Box>
+        <Box width={cols.extra} justifyContent="flex-end">
+          {extra}
+        </Box>
+      </Box>
+    )
+
     const toggle = (
-      <Box flexDirection="row">
+      <Box flexDirection="row" gap={1}>
         <Button
           key="show-session"
           plain
@@ -263,7 +280,7 @@ export const register: Register = on => {
           label="session"
           onPress={() => update($, view, () => 'session')}
         />
-        <Text color={paint(null, ink)}>│</Text>
+        <Text dimColor>│</Text>
         <Button
           key="show-30d"
           plain
@@ -274,44 +291,26 @@ export const register: Register = on => {
       </Box>
     )
 
-    // The engine draws the band's [-] marker at its top right: keep clear of it.
-    const frame = { flexDirection: 'column', width: '100%', paddingRight: ink === 'terminal' ? 4 : 0 } as const
+    const total = (
+      <Box flexDirection="row" gap={1}>
+        <Text dimColor>total</Text>
+        <Text bold>{usd(cost?.usd)}</Text>
+      </Box>
+    )
 
     if (shown === 'days30') {
       return (
-        <Box {...frame}>
-          <Text dimColor>last 30 days</Text>
-          <Box flexDirection="row" justifyContent="space-between">
-            <Text dimColor>not computed yet</Text>
-            {toggle}
-          </Box>
+        <Box flexDirection="column">
+          {row('30 days', null, <Text dimColor>not computed yet</Text>, total)}
+          {row('', null, <Text dimColor>coming in a later version</Text>, toggle)}
         </Box>
       )
     }
 
     return (
-      <Box {...frame}>
-        <Box flexDirection="row" justifyContent="space-between">
-          <Box flexDirection="row" gap={1}>
-            <Text dimColor>context</Text>
-            {bar(ctx, `context ${ctx.value} full`)}
-            <Text color={paint(ctx.severity, ink)}>{ctx.value}</Text>
-            <Text dimColor>{`· ${ctx.note}`}</Text>
-          </Box>
-          <Box flexDirection="row" gap={1}>
-            <Text dimColor>total</Text>
-            <Text bold>{usd(cost?.usd)}</Text>
-          </Box>
-        </Box>
-        <Box flexDirection="row" justifyContent="space-between">
-          <Box flexDirection="row" gap={1}>
-            <Text dimColor>{'cache  '}</Text>
-            {bar(cached, `cache ${cached.value}`)}
-            <Text color={paint(cached.severity, ink)}>{cached.value}</Text>
-            {cached.note !== '' && <Text dimColor>{cached.note}</Text>}
-          </Box>
-          {toggle}
-        </Box>
+      <Box flexDirection="column">
+        {row('Context', ctx, bar(ctx, 'context', `context ${ctx.side} full`), total)}
+        {row('Cache', cached, bar(cached, 'cache', `cache ${cached.main}${cached.sub}`), toggle)}
       </Box>
     )
   })
@@ -326,49 +325,50 @@ export const register: Register = on => {
     const state = await read($, cache)
     const cached = cacheModel(state, now, false, demoAt)
     const found = await read($, probe)
-    const cells = PANE_CELLS(e.props.bodyColumns)
+    const cols = rowLayout(e.props.bodyColumns, 0)
 
-    const bar = (m: BarModel, alt: string) => {
+    const bar = (m: BarModel, id: string, alt: string) => {
       if (e.surface === 'terminal') {
-        const n = filled(m.fraction, cells)
+        const parts = terminalBar(m.fraction, cols.bar, `${m.main}${m.sub}`)
+        const color = paint(m.severity, ink)
         return (
           <Box flexDirection="row">
-            <Text color={paint(m.severity, ink)}>{FULL.repeat(n)}</Text>
-            <Text color={paint(null, ink)}>{EMPTY.repeat(cells - n)}</Text>
+            <Text color={color}>{parts.fill}</Text>
+            <Text inverse bold color={color}>{parts.pill}</Text>
+            <Text color={paint(null, ink)}>{parts.track}</Text>
           </Box>
         )
       }
       const { Svg } = $.ui.resolve(e)
-      const width = cells * PX_PER_CELL
-      return <Svg source={svgBar(m.fraction, width, paint(m.severity, ink))} alt={alt} width={width} height={8} />
+      return <Svg source={svgBar(m, cols.bar * SVG_UNITS_PER_CELL, `dnmod-pane-${id}`)} alt={alt} />
     }
 
-    const row = (label: string, ...rest: RenderChildren[]) => (
+    const row = (label: string, m: BarModel, middle: RenderChildren) => (
       <Box flexDirection="row" gap={1}>
-        <Text dimColor>{label.padEnd(8)}</Text>
-        {rest}
+        <Box width={cols.label} flexDirection="row" gap={1}>
+          <Text color={paint(m.severity, ink)}>●</Text>
+          <Text>{label}</Text>
+        </Box>
+        <Box width={cols.bar}>{middle}</Box>
+        <Box width={cols.side} justifyContent="flex-end">
+          <Text dimColor>{m.side}</Text>
+        </Box>
       </Box>
     )
-    const cacheNote = [cached.note, state.kind === 'clock' && demoAt === null ? `${ttlText(state.ttlMs)} cache` : '']
-      .filter(note => note !== '')
-      .join(' · ')
 
     return (
       <Box flexDirection="column">
         <Text bold>THIS SESSION</Text>
-        {row(
-          'Context',
-          bar(ctx, `context ${ctx.value} full`),
-          <Text color={paint(ctx.severity, ink)}>{ctx.value}</Text>,
-          <Text dimColor>{`· ${ctx.note}`}</Text>,
-        )}
-        {row(
-          'Cache',
-          bar(cached, `cache ${cached.value}`),
-          <Text color={paint(cached.severity, ink)}>{cached.value}</Text>,
-          cacheNote !== '' && <Text dimColor>{`· ${cacheNote}`}</Text>,
-        )}
-        {row('Spend', <Text dimColor>total</Text>, <Text bold>{usd(cost?.usd)}</Text>)}
+        {row('Context', ctx, bar(ctx, 'context', `context ${ctx.side} full`))}
+        {row('Cache', cached, bar(cached, 'cache', `cache ${cached.main}${cached.sub}`))}
+        <Box flexDirection="row" gap={1}>
+          <Box width={cols.label}>
+            <Text dimColor>Spend</Text>
+          </Box>
+          <Text dimColor>total</Text>
+          <Text bold>{usd(cost?.usd)}</Text>
+          {state.kind === 'clock' && <Text dimColor>{`· ${ttlText(state.ttlMs)} cache`}</Text>}
+        </Box>
         <Text> </Text>
         <Text bold>LAST 30 DAYS</Text>
         <Text dimColor>not computed yet</Text>
