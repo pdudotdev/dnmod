@@ -1,6 +1,5 @@
 {
   "name": "dnmod",
-  "version": "0.1.0",
   "description": "Session cost, context and cache figures above the prompt, with a toggle for 30-day stats",
   "author": {
     "name": "pdudotdev"

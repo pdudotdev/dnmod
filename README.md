@@ -1,12 +1,48 @@
 # dnmod
 
-A Claude Code mod that shows session cost, context and cache figures above the prompt, with a toggle for 30-day stats.
+**TL;DR:** a Claude Code mod that shows, at a glance, how full your session's context is and what the session has cost, with one click to switch to your last 30 days.
 
-Works in Claude Code CLI, Desktop (Code tab) and VS Code, locally and over SSH.
+> Early version: the band shows context and session cost. The cache countdown, today's spend, resume cost and the 30-day figures are coming next.
+
+## What you see
+
+| Where | What | Surfaces |
+|---|---|---|
+| **Band** above the prompt | `context 11% (109k of 1.0M) · total $1.74   30 days` | CLI, Desktop |
+| **`30 days`** button in the band | Switches the band between this session and the last 30 days | CLI, Desktop |
+| **`/dnmod`** side panel | The same figures, plus a check of what dnmod can read on this machine | CLI, Desktop, VS Code |
+
+To press the band's button: click it, or press `ctrl+x tab` and then `Enter`.
+
+## How it works
+
+dnmod runs inside Claude Code itself, so there's no separate app or server, and nothing is sent anywhere. It reads Claude Code's own figures for the session, and the transcripts in `~/.claude` for history. Over SSH it runs on the remote machine and reads that machine's sessions.
 
 ## Install
 
+**You need:**
+- Claude Code 2.1.287 or later.
+- Read access to this private repo (ask the owner), and git signed in to GitHub. Either run `gh auth login` then `gh auth setup-git`, or have a GitHub SSH key loaded in your ssh-agent.
+
+**Install once per machine, from a shell.** It then works in the CLI, Desktop and VS Code on that machine:
+
+```sh
+claude plugin marketplace add pdudotdev/dnmod
+claude plugin install dnmod@dnmod
 ```
-/plugin marketplace add pdudotdev/dnmod
-/plugin install dnmod@dnmod
-```
+
+Then start a new session, or run `/reload-plugins` in an open one.
+
+**Or install from inside a session:**
+
+| Surface | How |
+|---|---|
+| CLI | `/plugin install dnmod --marketplace pdudotdev/dnmod`, then pick a scope |
+| Desktop (Code tab) | **+** → **Plugins** → **Add plugin** → dnmod (after adding the marketplace above) |
+| VS Code | `/plugins` → **Marketplaces**: add `pdudotdev/dnmod` → **Plugins**: install dnmod |
+
+**Over SSH** (VS Code Remote-SSH, Desktop SSH sessions, or `ssh` then `claude`): run the two shell commands on the **remote** machine.
+
+**Update:** `claude plugin marketplace update dnmod && claude plugin update dnmod@dnmod`
+
+**Uninstall:** `claude plugin marketplace remove dnmod` (this also removes the plugin)
