@@ -247,11 +247,19 @@ export const register: Register = on => {
       if (e.surface === 'terminal') {
         const parts = terminalBar(m.fraction, cols.bar, m, m.end)
         const color = paint(m.severity, ink)
+        const grey = paint(null, ink)
         return (
           <Box flexDirection="row">
             <Text color={color}>{parts.fill}</Text>
-            <Text inverse bold color={color}>{parts.pill}</Text>
-            <Text color={paint(null, ink)}>{parts.track}</Text>
+            <Text color={grey}>{parts.gap}</Text>
+            <Text inverse={parts.solid} bold color={color}>
+              {parts.main}
+            </Text>
+            <Text inverse={parts.solid} color={color}>
+              {parts.sub}
+            </Text>
+            <Text color={color}>{parts.heavy}</Text>
+            <Text color={grey}>{parts.track}</Text>
             <Text dimColor>{parts.end}</Text>
           </Box>
         )
@@ -337,11 +345,19 @@ export const register: Register = on => {
       if (e.surface === 'terminal') {
         const parts = terminalBar(m.fraction, cols.bar, m, m.end)
         const color = paint(m.severity, ink)
+        const grey = paint(null, ink)
         return (
           <Box flexDirection="row">
             <Text color={color}>{parts.fill}</Text>
-            <Text inverse bold color={color}>{parts.pill}</Text>
-            <Text color={paint(null, ink)}>{parts.track}</Text>
+            <Text color={grey}>{parts.gap}</Text>
+            <Text inverse={parts.solid} bold color={color}>
+              {parts.main}
+            </Text>
+            <Text inverse={parts.solid} color={color}>
+              {parts.sub}
+            </Text>
+            <Text color={color}>{parts.heavy}</Text>
+            <Text color={grey}>{parts.track}</Text>
             <Text dimColor>{parts.end}</Text>
           </Box>
         )

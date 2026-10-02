@@ -24,7 +24,7 @@ dnmod runs inside Claude Code itself, so there's no separate app or server, and 
 ## Install
 
 **You need:**
-- Claude Code 2.1.286 or later in **every** Claude Code app on the machine: the CLI, Desktop and the VS Code extension. Mods are early access and switched on per version, and one older install on the machine can switch them off for the others.
+- Claude Code 2.1.287 or later in **every** Claude Code app on the machine: the CLI, Desktop and the VS Code extension. Mods are early access and switched on per version, and one older install on the machine can switch them off for the others.
 - git: Claude Code downloads dnmod from GitHub with it.
 
 **Install once per machine, from a shell.** It then works in the CLI, Desktop and VS Code on that machine:

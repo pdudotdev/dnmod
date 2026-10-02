@@ -224,26 +224,62 @@ export const filled = (fraction: number, width: number): number => {
 }
 
 /**
- * A terminal bar `cells` wide: a heavy line for the fill, the pill in reverse video at its leading
- * edge (inside the fill, or just past it when the fill is short), a light line for the rest, and
- * the end cap's text at the far end when there's room. Heavy against light reads without colour
- * too. (No tick marks: box-drawing notches join up between the two rows into a grid.)
+ * Where a bar's pill goes, in the bar's units (cells, or SVG units): `fill` filled of `total`,
+ * the pill `pill` long, an end cap `cap` long (0 for none), `gap` between neighbours.
+ *
+ * The pill rides inside the fill's leading edge once the fill holds it, else sits just past it.
+ * It never runs into the end cap: it rests against it while the fill runs on underneath, so both
+ * stay readable up to the end. The cap shows only when the bar holds both. `solid` when the pill
+ * lies on the fill: drawn solid there, and as an outline past it, so only the fill reads as
+ * progress.
+ */
+export const placePill = (
+  fill: number,
+  pill: number,
+  total: number,
+  cap: number,
+  gap: number,
+): { at: number; solid: boolean; cap: boolean } => {
+  const hasCap = cap > 0 && total - cap - gap - pill >= 0
+  const limit = hasCap ? total - cap - gap - pill : total - pill
+  const rides = fill >= pill + gap
+  const at = Math.max(0, Math.min(rides ? fill - pill : fill + (fill > 0 ? gap : 0), limit))
+  return { at, solid: at + pill <= fill, cap: hasCap }
+}
+
+/**
+ * A terminal bar `cells` wide, as segments to colour: the heavy line of the fill, a light gap,
+ * the pill (`main` and `sub`; reverse video when `solid`, plain coloured text past the fill), the
+ * fill's heavy line beyond a docked pill, the light line of the rest, and the end cap's text.
+ * Heavy against light reads without colour too. (No tick marks: box-drawing notches join up
+ * between the two rows into a grid.)
  */
 export const terminalBar = (
   fraction: number,
   cells: number,
   pill: { main: string; sub: string },
   endCap = '',
-): { fill: string; pill: string; track: string; end: string } => {
+): { fill: string; gap: string; main: string; sub: string; solid: boolean; heavy: string; track: string; end: string } => {
   const fitted = fitPill(pill.main, pill.sub, cells - 2)
-  const label = ` ${fitted.main}${fitted.sub} `
+  const main = ` ${fitted.main}`
+  const sub = `${fitted.sub} `
+  const length = main.length + sub.length
+  const end = endCap === '' ? '' : ` ${endCap} `
   const n = filled(fraction, cells)
-  const start = Math.min(cells - label.length, n >= label.length ? n - label.length : n)
-  const after = Math.max(n, start + label.length)
-  const heavy = '━'.repeat(Math.max(0, n - start - label.length))
-  const room = cells - after
-  const end = endCap !== '' && room >= endCap.length + 4 ? ` ${endCap} ` : ''
-  return { fill: '━'.repeat(start), pill: label, track: heavy + '─'.repeat(room - end.length), end }
+  const place = placePill(n, length, cells, end.length, 1)
+  const stop = cells - (place.cap ? end.length : 0)
+  const after = place.at + length
+  const heavy = Math.max(0, Math.min(n, stop) - after)
+  return {
+    fill: '━'.repeat(Math.min(place.at, n)),
+    gap: '─'.repeat(Math.max(0, place.at - n)),
+    main,
+    sub,
+    solid: place.solid,
+    heavy: '━'.repeat(heavy),
+    track: '─'.repeat(Math.max(0, stop - after - heavy)),
+    end: place.cap ? end : '',
+  }
 }
 
 /** A plain-text bar for the chat reply (VS Code), where nothing is coloured. */
@@ -277,8 +313,8 @@ const dotTile = (id: string, color: string, strength: number): string =>
 
 /**
  * The desktop bar: a rounded, faintly grained track; a dot-matrix fill that brightens toward its
- * edge; notches at the quarters; the pill riding the fill's leading edge; and, when there's room,
- * an outlined cap at the far end (`end`).
+ * edge; notches at the quarters; the pill (see placePill: solid on the fill, outlined past it);
+ * and, when there's room, an outlined cap at the far end (`end`).
  *
  * Drawn in a viewBox `width` units wide. Given no width, the desktop app draws an SVG at its own
  * width up to the room it has, scaling it down uniformly, so pass more than the room (cells × 9)
@@ -290,25 +326,33 @@ export const svgBar = (m: BarModel, width: number, id: string): string => {
   const fx = Math.min(1, Math.max(0, m.fraction)) * W
   const { main, sub } = fitPill(m.main, m.sub, Math.floor((W - 24) / 7.1))
   const pillW = Math.round((main.length + sub.length) * 7.1 + 20)
-  const px = Math.max(0, Math.min(W - pillW, m.fraction >= 0.15 ? fx - pillW : fx + 4))
-  const ink = textOn(color)
-  // The cap at the far end, when the pill leaves room for it: its own background keeps it
-  // readable on either theme, dark where the app says it is dark.
   const capW = m.end === '' ? 0 : Math.round(m.end.length * 6.6 + 18)
+  const place = placePill(fx, pillW, W, capW + 2, 6)
+  const px = place.at
   const capX = W - capW - 2
-  const cap =
-    capW > 0 && px + pillW + 8 <= capX
-      ? `<style>.${id}-cap{fill:#ffffff;fill-opacity:.85}.${id}-capt{fill:#4a4844}` +
-        `@media (prefers-color-scheme: dark){.${id}-cap{fill:#2b2a28}.${id}-capt{fill:#d8d5cf}}</style>` +
-        `<rect class="${id}-cap" x="${capX}" y="2.5" width="${capW}" height="${HEIGHT - 5}" rx="${(HEIGHT - 5) / 2}" stroke="${SVG_TRACK}" stroke-opacity="0.55"/>` +
-        `<text class="${id}-capt" x="${(capX + capW / 2).toFixed(1)}" y="${HEIGHT / 2 + 4.3}" text-anchor="middle" font-family="${FONT}" font-size="12" font-weight="500">${esc(m.end)}</text>`
-      : ''
+  // Outlined pieces (the cap, and the pill past the fill) carry their own background, light or
+  // dark as the app is, so they read on either theme.
+  const style =
+    `<style>.${id}-box{fill:#ffffff;fill-opacity:.88}.${id}-ink{fill:#3d3b37}` +
+    `@media (prefers-color-scheme: dark){.${id}-box{fill:#2b2a28}.${id}-ink{fill:#e8e5df}}</style>`
+  const cap = place.cap
+    ? `<rect class="${id}-box" x="${capX}" y="2.5" width="${capW}" height="${HEIGHT - 5}" rx="${(HEIGHT - 5) / 2}" stroke="${SVG_TRACK}" stroke-opacity="0.55"/>` +
+      `<text class="${id}-ink" x="${(capX + capW / 2).toFixed(1)}" y="${HEIGHT / 2 + 4.3}" text-anchor="middle" font-family="${FONT}" font-size="12" font-weight="500" fill-opacity="0.8">${esc(m.end)}</text>`
+    : ''
+  const text = (attrs: string) =>
+    `<text x="${(px + pillW / 2).toFixed(1)}" y="${HEIGHT / 2 + 4.5}" text-anchor="middle" font-family="${FONT}" font-size="12.5" font-weight="600" ${attrs}>${esc(main)}<tspan fill-opacity="0.72" font-weight="500">${esc(sub)}</tspan></text>`
+  const pill = place.solid
+    ? `<rect x="${px.toFixed(1)}" y="2" width="${pillW}" height="${HEIGHT - 4}" rx="${(HEIGHT - 4) / 2}" fill="${color}"/>` +
+      text(`fill="${textOn(color)}"`)
+    : `<rect class="${id}-box" x="${(px + 0.75).toFixed(1)}" y="2.75" width="${pillW - 1.5}" height="${HEIGHT - 5.5}" rx="${(HEIGHT - 5.5) / 2}" stroke="${color}" stroke-width="1.5"/>` +
+      text(`class="${id}-ink"`)
   const ticks = TICKS.map(t => {
     const on = t * W < fx
     return `<rect x="${(t * W - 0.75).toFixed(1)}" y="6" width="1.5" height="${HEIGHT - 12}" rx="0.75" fill="${on ? '#ffffff' : SVG_TRACK}" fill-opacity="${on ? 0.6 : 0.45}"/>`
   }).join('')
   return (
     `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${HEIGHT}" viewBox="0 0 ${W} ${HEIGHT}">` +
+    style +
     `<defs>${dotTile(`${id}-dots`, color, 1)}${dotTile(`${id}-grain`, SVG_TRACK, 0.3)}` +
     `<linearGradient id="${id}-glow" x1="0" x2="1"><stop offset="0" stop-color="${color}" stop-opacity="0.08"/><stop offset="1" stop-color="${color}" stop-opacity="0.5"/></linearGradient>` +
     `<clipPath id="${id}-track"><rect width="${W}" height="${HEIGHT}" rx="${HEIGHT / 2}"/></clipPath>` +
@@ -319,8 +363,7 @@ export const svgBar = (m: BarModel, width: number, id: string): string => {
       : '') +
     ticks +
     cap +
-    `<rect x="${px.toFixed(1)}" y="2" width="${pillW}" height="${HEIGHT - 4}" rx="${(HEIGHT - 4) / 2}" fill="${color}"/>` +
-    `<text x="${(px + pillW / 2).toFixed(1)}" y="${HEIGHT / 2 + 4.5}" text-anchor="middle" font-family="${FONT}" font-size="12.5" font-weight="600" fill="${ink}">${esc(main)}<tspan fill-opacity="0.72" font-weight="500">${esc(sub)}</tspan></text>` +
+    pill +
     `</svg>`
   )
 }

@@ -43,7 +43,10 @@ Status on 2026-10-02, `main` of https://github.com/pdudotdev/dnmod (public; see 
 ● Cache    ━━━━━━━ 52:10 left ───────────────────────────────────────────────  13%    session│30d
 ```
 - **Row layout:** every row has the same columns, with fixed widths in cells (`rowLayout`): a dot coloured by severity with the label, the bar, the value beside it, then an extra column. The bar gets whatever the others leave, so the bars of both rows start and end at the same x and span the row. On the terminal, rows keep 4 columns clear on the right for the engine's `[-]` band marker.
-- **The pill:** each bar carries a pill at its fill's leading edge, inside the fill or just past it when the fill is short. It holds the bar's value: `390k / 1M`, `52:10 left`, `expired 4m ago`, `in use`, `no reply yet`. The value beside the bar is the fill in per cent.
+- **The pill:** each bar carries a pill at its fill's leading edge (`placePill` in `hooks/format.ts`).
+  - **On the fill:** the pill rides inside the fill's leading edge and is drawn **solid**.
+  - **Past a short fill:** it sits just past the fill and is drawn as an **outline** (a neutral background, a border in the bar's colour, plain text; in the terminal, coloured text without reverse video). The user saw a new session's long solid pill as "already consumed", so only the fill may read as progress.
+  - **At the end cap:** a pill never runs into the cap. It rests against it while the fill runs on underneath, so both prices stay readable up to expiry. The cap shows only when the bar holds both. It holds the bar's value: `390k / 1M`, `52:10 left`, `expired 4m ago`, `in use`, `no reply yet`. The value beside the bar is the fill in per cent.
 - **Context bar:** fills with the context. It stays green to half full, then shades to red when full.
 - **Cache bar:** fills as the cache ages, so the share is how much of the cache's life is used. Fresh is green and nearly empty; expired is full and red.
 - **Desktop drawing (`svgBar`):** a rounded, faintly grained track; a dot-matrix fill (2×2 dots, pseudo-random strengths) that brightens toward its edge; tick marks at the quarters; and the pill, with its value bright and the unit dimmer. Light pills get dark text (`textOn`). Modelled on a reference the user liked: a dotted, textured progress bar with a pill at the fill's edge.

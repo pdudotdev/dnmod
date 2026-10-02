@@ -9,6 +9,7 @@ import {
   fitPill,
   mmss,
   paint,
+  placePill,
   resend,
   resendLine,
   rowLayout,
@@ -123,16 +124,41 @@ test('the cache bar: time left and the price now in its pill, the price once exp
   expect(cacheModel({ kind: 'unknown', reason: 'tail failed' }, 0, false, null).main).toBe('unknown')
 })
 
-test('the terminal bar puts the pill at the fill edge, or just past a short fill', () => {
-  const pill = (main: string, sub = '') => ({ main, sub })
-  expect(terminalBar(0.5, 20, pill('5k'))).toEqual({ fill: '━━━━━━', pill: ' 5k ', track: '──────────', end: '' })
-  expect(terminalBar(0.1, 20, pill('5k'))).toEqual({ fill: '━━', pill: ' 5k ', track: '──────────────', end: '' })
-  expect(terminalBar(1, 20, pill('expired'))).toEqual({ fill: '━━━━━━━━━━━', pill: ' expired ', track: '', end: '' })
-  expect(terminalBar(0, 20, pill('no reply yet'))).toEqual({ fill: '', pill: ' no reply yet ', track: '──────', end: '' })
+test('placePill: rides inside the fill once it holds the pill, else just past it, outlined', () => {
+  expect(placePill(50, 20, 100, 0, 1)).toEqual({ at: 30, solid: true, cap: false })
+  expect(placePill(10, 20, 100, 0, 1)).toEqual({ at: 11, solid: false, cap: false })
+  expect(placePill(0, 20, 100, 0, 1)).toEqual({ at: 0, solid: false, cap: false })
 })
 
-test('the terminal bar puts the end cap at the far end when there is room', () => {
-  expect(terminalBar(0.1, 30, { main: '5k', sub: '' }, 'then $1')).toEqual({ fill: '━━━', pill: ' 5k ', track: '──────────────', end: ' then $1 ' })
+test('placePill: rests against the end cap, the fill running on underneath; no cap without room for both', () => {
+  // the cap takes the last 15; the pill stops at 100 - 15 - 1 - 20 = 64, still on the fill
+  expect(placePill(95, 20, 100, 15, 1)).toEqual({ at: 64, solid: true, cap: true })
+  expect(placePill(5, 20, 30, 15, 1)).toEqual({ at: 6, solid: false, cap: false })
+})
+
+test('the terminal bar: a solid pill on the fill, plain text past a short one', () => {
+  const pill = (main: string, sub = '') => ({ main, sub })
+  expect(terminalBar(0.5, 20, pill('5k'))).toEqual({
+    fill: '━━━━━━',
+    gap: '',
+    main: ' 5k',
+    sub: ' ',
+    solid: true,
+    heavy: '',
+    track: '──────────',
+    end: '',
+  })
+  expect(terminalBar(0.1, 20, pill('5k'))).toMatchObject({ fill: '━━', gap: '─', main: ' 5k', solid: false, track: '─────────────' })
+  expect(terminalBar(1, 20, pill('expired'))).toMatchObject({ fill: '━━━━━━━━━━━', solid: true, heavy: '', track: '' })
+  expect(terminalBar(0, 20, pill('no reply yet'))).toMatchObject({ fill: '', gap: '', solid: false, track: '──────' })
+})
+
+test('the terminal bar keeps the end cap, the pill resting against it near the end', () => {
+  const near = terminalBar(0.95, 60, { main: '3:30 left', sub: ' · $0.14 now' }, 'then up to $5.76')
+  expect(near).toMatchObject({ fill: '━'.repeat(18), solid: true, heavy: '━', track: '', end: ' then up to $5.76 ' })
+  expect(near.fill.length + near.gap.length + near.main.length + near.sub.length + near.heavy.length + near.track.length + near.end.length).toBe(60)
+  // too narrow for both: the cap goes
+  expect(terminalBar(0.95, 40, { main: '3:30 left', sub: ' · $0.14 now' }, 'then up to $5.76').end).toBe('')
   expect(terminalBar(0.5, 20, { main: '5k', sub: '' }, 'then up to $0.27')).toMatchObject({ end: '' })
 })
 
@@ -142,7 +168,6 @@ test('a long pill drops its trailing parts before it is cut', () => {
   // A cut-off price is useless, so the whole part goes: "expired" alone.
   expect(fitPill('expired', ' · up to $0.44 to resume', 20)).toEqual({ main: 'expired', sub: '' })
   expect(fitPill('a very long main text', '', 10)).toEqual({ main: 'a very lo…', sub: '' })
-  expect(terminalBar(1, 34, { main: 'expired', sub: ' · up to $0.44 to resume · 2h 1m ago' }).pill).toBe(' expired · up to $0.44 to resume ')
 })
 
 test('textBar fills by fraction, heavy against light', () => {
@@ -150,10 +175,13 @@ test('textBar fills by fraction, heavy against light', () => {
   expect(textBar(0.001, 4)).toBe('━───')
 })
 
-test('the SVG bar draws its end cap only where the pill leaves room', () => {
+test('the SVG bar keeps its end cap up to the end, and outlines a pill that sits past the fill', () => {
   const base = { severity: 0, main: '30:00 left', sub: ' · $0.01 now', side: '50%', end: 'then up to $0.27' }
   expect(svgBar({ ...base, fraction: 0.3 }, 900, 'k')).toContain('then up to $0.27')
-  expect(svgBar({ ...base, fraction: 0.97 }, 900, 'k')).not.toContain('then up to $0.27')
+  expect(svgBar({ ...base, fraction: 0.97 }, 900, 'k')).toContain('then up to $0.27')
+  expect(svgBar({ ...base, fraction: 0.01 }, 900, 'k')).toContain('stroke="#3fb950" stroke-width="1.5"')
+  expect(svgBar({ ...base, fraction: 0.5 }, 900, 'k')).not.toContain('stroke-width="1.5"')
+  expect(svgBar({ ...base, fraction: 0.5 }, 160, 'k')).not.toContain('then up to $0.27')
 })
 
 test('the SVG bar is drawn in its viewBox width, with the pill text escaped', () => {
